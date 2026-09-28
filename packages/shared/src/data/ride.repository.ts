@@ -1,5 +1,5 @@
 import type { RideRequest, RideStatus } from '../domain/types';
-import { getSupabaseClient } from './supabase';
+import { supabase } from './supabaseClient';
 
 const TABLA = 'ride_requests';
 
@@ -11,7 +11,6 @@ export const rideRepository = {
     destino: { lat: number; lng: number };
     tarifaEstimada: number;
   }): Promise<RideRequest> {
-    const supabase = getSupabaseClient();
     const { data, error } = await supabase
       .from(TABLA)
       .insert({
@@ -30,7 +29,6 @@ export const rideRepository = {
   },
 
   async obtenerSolicitudesPendientes(): Promise<RideRequest[]> {
-    const supabase = getSupabaseClient();
     const { data, error } = await supabase
       .from(TABLA)
       .select('*')
@@ -45,7 +43,6 @@ export const rideRepository = {
     id: string,
     cambios: { estado?: RideStatus; conductorId?: string },
   ): Promise<RideRequest> {
-    const supabase = getSupabaseClient();
     const { data, error } = await supabase
       .from(TABLA)
       .update({

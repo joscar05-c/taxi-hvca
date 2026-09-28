@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 
 import { authRepository } from '../data/auth.repository';
-import { getSupabaseClient } from '../data/supabase';
+import { getSupabaseClient } from '../data/supabaseClient';
 import type { Profile } from '../domain/types';
 
 export interface UseAuthResult {
