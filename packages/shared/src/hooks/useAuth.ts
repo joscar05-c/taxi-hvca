@@ -1,73 +1,42 @@
-import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 
-import { authRepository } from '../data/auth.repository';
-import { getSupabaseClient } from '../data/supabaseClient';
+import { supabase } from '../data/supabaseClient';
 import type { Profile } from '../domain/types';
+import { useAuthStore } from '../store/useAuthStore';
 
 export interface UseAuthResult {
   sesion: Session | null;
   perfil: Profile | null;
-  cargando: boolean;
-  error: string | null;
-  iniciarSesion: (email: string, password: string) => Promise<boolean>;
+  isInitialized: boolean;
+  iniciarSesion: (email: string, password: string) => Promise<{
+    ok: boolean;
+    error?: string;
+  }>;
   cerrarSesion: () => Promise<void>;
 }
 
-/** Puente entre la UI y la capa de datos para autenticación. */
+/**
+ * Hook de solo lectura: no mantiene estado local.
+ * Todo se lee de `useAuthStore` (única fuente de la verdad); las acciones
+ * disparan Supabase y el listener de `onAuthStateChange` actualiza el store.
+ */
 export function useAuth(): UseAuthResult {
-  const [sesion, setSesion] = useState<Session | null>(null);
-  const [perfil, setPerfil] = useState<Profile | null>(null);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const sesion = useAuthStore((state) => state.session);
+  const perfil = useAuthStore((state) => state.perfil);
+  const isInitialized = useAuthStore((state) => state.isInitialized);
 
-  useEffect(() => {
-    const supabase = getSupabaseClient();
-
-    supabase.auth
-      .getSession()
-      .then(({ data }) => setSesion(data.session))
-      .finally(() => setCargando(false));
-
-    const { data: suscripcion } = supabase.auth.onAuthStateChange((_evento, nuevaSesion) => {
-      setSesion(nuevaSesion);
+  async function iniciarSesion(email: string, password: string) {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
     });
-
-    return () => suscripcion.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!sesion) {
-      setPerfil(null);
-      return;
-    }
-    authRepository
-      .obtenerPerfilActual()
-      .then(setPerfil)
-      .catch(() => setPerfil(null));
-  }, [sesion?.user.id]);
-
-  async function iniciarSesion(email: string, password: string): Promise<boolean> {
-    try {
-      setError(null);
-      const { data, error } = await getSupabaseClient().auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      setSesion(data.session);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo iniciar sesión.');
-      return false;
-    }
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, error: data.session ? undefined : 'Revisa tu correo para confirmar.' };
   }
 
   async function cerrarSesion() {
-    await getSupabaseClient().auth.signOut();
-    setSesion(null);
-    setPerfil(null);
+    await supabase.auth.signOut();
   }
 
-  return { sesion, perfil, cargando, error, iniciarSesion, cerrarSesion };
+  return { sesion, perfil, isInitialized, iniciarSesion, cerrarSesion };
 }
