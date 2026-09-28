@@ -30,4 +30,33 @@ export const authRepository = {
     if (error) throw error;
     return data;
   },
+
+  async actualizarConexion(estaConectado: boolean): Promise<Profile> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Sesión no iniciada.');
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ esta_conectado: estaConectado })
+      .eq('id', user.id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return data;
+  },
+
+  async actualizarUbicacion(latitud: number, longitud: number): Promise<void> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Sesión no iniciada.');
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        ubicacion_actual: `SRID=4326;POINT(${longitud} ${latitud})`,
+      })
+      .eq('id', user.id);
+
+    if (error) throw error;
+  },
 };

@@ -14,6 +14,8 @@ export type Profile = {
   telefono: string;
   calificacion_promedio: number;
   estado: RiderStatus;
+  esta_conectado: boolean;
+  ubicacion_actual: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,8 +53,13 @@ export type Database = {
     Tables: {
       profiles: {
         Row: Profile;
-        Insert: Omit<Profile, 'id' | 'created_at' | 'updated_at'> & {
+        Insert: Omit<
+          Profile,
+          'id' | 'created_at' | 'updated_at' | 'esta_conectado' | 'ubicacion_actual'
+        > & {
           id: string;
+          esta_conectado?: boolean;
+          ubicacion_actual?: string | null;
         };
         Update: Partial<Profile>;
         Relationships: [];

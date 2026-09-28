@@ -22,6 +22,10 @@ export type { UseAuthResult } from './hooks/useAuth';
 export { useAuthInit } from './hooks/useAuthInit';
 export { useLocation } from './hooks/useLocation';
 export type { UseLocationResult } from './hooks/useLocation';
+export { useForegroundLocation } from './hooks/useForegroundLocation';
+export type { ForegroundLocationResult } from './hooks/useForegroundLocation';
+export { useBackgroundLocation } from './hooks/useBackgroundLocation';
+export type { UseBackgroundLocationResult } from './hooks/useBackgroundLocation';
 
 // Estado global
 export { useAuthStore } from './store/useAuthStore';
