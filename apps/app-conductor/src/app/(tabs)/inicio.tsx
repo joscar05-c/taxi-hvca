@@ -1,30 +1,117 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   Button,
+  Input,
   authRepository,
+  calcularDistanciaHaversine,
   colores,
   useAuth,
   useBackgroundLocation,
+  useForegroundLocation,
+  viajesRepository,
+  type Coordenadas,
+  type SolicitudViaje,
 } from '@hvca/shared';
 
 import { BACKGROUND_LOCATION_TASK } from '../../locationTask';
 
+const DISTANCIA_MAX_KM = 3;
+
+type SolicitudCercana = {
+  solicitud: SolicitudViaje;
+  distanciaKm: number;
+};
+
+/**
+ * Parsea un punto PostGIS (EWKT) como "SRID=4326;POINT(lng lat)" y devuelve
+ * sus coordenadas. Devuelve null si el texto no tiene una geometría Point.
+ */
+function parsearPuntoPostgis(texto: string | null): Coordenadas | null {
+  const match = texto?.match(
+    /POINT\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)/i,
+  );
+  if (!match) return null;
+  const lat = parseFloat(match[2]);
+  const lng = parseFloat(match[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { latitude: lat, longitude: lng };
+}
+
 export default function PantallaInicio() {
-  const { perfil, cerrarSesion } = useAuth();
-  const { isTracking, loading, error, startTracking, stopTracking } =
+  const { perfil, sesion, cerrarSesion } = useAuth();
+  const { isTracking, loading, error: errorTracking, startTracking, stopTracking } =
     useBackgroundLocation(BACKGROUND_LOCATION_TASK);
+  const { coords, requestPermissionAndLocate } = useForegroundLocation();
+
   const [operando, setOperando] = useState(false);
   const [mensaje, setMensaje] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [solicitudesCercanas, setSolicitudesCercanas] = useState<
+    SolicitudCercana[]
+  >([]);
+  const [ofertasEnviadas, setOfertasEnviadas] = useState<Set<string>>(
+    new Set(),
+  );
+  const [contraofertaId, setContraofertaId] = useState<string | null>(null);
+  const [precioContraoferta, setPrecioContraoferta] = useState('');
+
+  // Posición del conductor: la del primer plano si ya la tenemos; si no,
+  // la última `ubicacion_actual` (EWKT) persistida en la BD.
+  const ubicacionConductor = useMemo<Coordenadas | null>(() => {
+    if (coords) {
+      return { latitude: coords.latitude, longitude: coords.longitude };
+    }
+    return parsearPuntoPostgis(perfil?.ubicacion_actual ?? null);
+  }, [coords, perfil]);
+
+  // Ref para leer la posición dentro del callback realtime sin resuscribir.
+  const ubicacionRef = useRef(ubicacionConductor);
+  useEffect(() => {
+    ubicacionRef.current = ubicacionConductor;
+  }, [ubicacionConductor]);
+
+  // Al conectarse pedimos una posición en primer plano para medir distancias.
+  useEffect(() => {
+    if (isTracking) {
+      void requestPermissionAndLocate();
+    }
+  }, [isTracking, requestPermissionAndLocate]);
+
+  const manejarNuevaSolicitud = useCallback((solicitud: SolicitudViaje) => {
+    const pos = ubicacionRef.current;
+    if (!pos) return;
+
+    const distanciaKm = calcularDistanciaHaversine(
+      solicitud.origen_lat,
+      solicitud.origen_lng,
+      pos.latitude,
+      pos.longitude,
+    );
+    if (distanciaKm >= DISTANCIA_MAX_KM) return;
+
+    setSolicitudesCercanas((prev) =>
+      prev.some((s) => s.solicitud.id === solicitud.id)
+        ? prev
+        : [...prev, { solicitud, distanciaKm }],
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!isTracking) return;
+    return viajesRepository.suscribirNuevasSolicitudes(manejarNuevaSolicitud);
+  }, [isTracking, manejarNuevaSolicitud]);
 
   async function alternarConexion() {
     setMensaje(null);
+    setError(null);
     setOperando(true);
     try {
       if (isTracking) {
         await stopTracking();
         await authRepository.actualizarConexion(false);
+        setSolicitudesCercanas([]);
         setMensaje('Te desconectaste. Ya no compartes tu ubicación.');
       } else {
         const iniciado = await startTracking();
@@ -35,30 +122,99 @@ export default function PantallaInicio() {
           setMensaje('Estás conectado. Compartimos tu ubicación en segundo plano.');
         } catch (e) {
           await stopTracking();
-          setMensaje(
+          setError(
             e instanceof Error ? e.message : 'No se pudo actualizar tu conexión.',
           );
         }
       }
     } catch (e) {
-      setMensaje(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
+      setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  function marcarOfertada(solicitudId: string) {
+    setOfertasEnviadas((prev) => {
+      const nuevo = new Set(prev);
+      nuevo.add(solicitudId);
+      return nuevo;
+    });
+  }
+
+  async function aceptarSolicitud(solicitud: SolicitudViaje) {
+    if (!sesion?.user) return;
+    setError(null);
+    setMensaje(null);
+    setOperando(true);
+    try {
+      await viajesRepository.enviarOferta(
+        solicitud.id,
+        sesion.user.id,
+        solicitud.precio_inicial,
+      );
+      marcarOfertada(solicitud.id);
+      setMensaje('Oferta enviada al pasajero.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo enviar la oferta.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  function abrirContraoferta(solicitud: SolicitudViaje) {
+    setContraofertaId(solicitud.id);
+    setPrecioContraoferta(String(solicitud.precio_inicial));
+    setError(null);
+  }
+
+  async function confirmarContraoferta(solicitud: SolicitudViaje) {
+    if (!sesion?.user || contraofertaId !== solicitud.id) return;
+
+    const precio = parseFloat(precioContraoferta.trim().replace(',', '.'));
+    if (!Number.isFinite(precio) || precio <= 0) {
+      setError('Ingresa un precio válido.');
+      return;
+    }
+    if (precio <= solicitud.precio_inicial) {
+      setError('La contraoferta debe ser mayor al precio del pasajero.');
+      return;
+    }
+
+    setError(null);
+    setMensaje(null);
+    setOperando(true);
+    try {
+      await viajesRepository.enviarOferta(solicitud.id, sesion.user.id, precio);
+      marcarOfertada(solicitud.id);
+      setContraofertaId(null);
+      setMensaje('Contraoferta enviada.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo enviar la contraoferta.');
     } finally {
       setOperando(false);
     }
   }
 
   return (
-    <View style={styles.contenedor}>
+    <ScrollView
+      style={styles.contenedor}
+      contentContainerStyle={styles.contenido}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.cabecera}>
         <Text style={styles.saludo}>Hola,</Text>
-        <Text style={styles.nombre}>
-          {perfil?.nombre ?? 'Conductor'}
-        </Text>
+        <Text style={styles.nombre}>{perfil?.nombre ?? 'Conductor'}</Text>
       </View>
 
       <View style={styles.central}>
         <View style={styles.tarjeta}>
-          <View style={[styles.punto, isTracking ? styles.puntoActivo : styles.puntoInactivo]} />
+          <View
+            style={[
+              styles.punto,
+              isTracking ? styles.puntoActivo : styles.puntoInactivo,
+            ]}
+          />
           <Text style={styles.estadoTexto}>
             {isTracking ? 'Conectado' : 'Desconectado'}
           </Text>
@@ -77,14 +233,98 @@ export default function PantallaInicio() {
           estilo={styles.boton}
         />
 
+        {errorTracking ? (
+          <Text style={styles.error}>{errorTracking}</Text>
+        ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
       </View>
 
+      {isTracking ? (
+        <View style={styles.radar}>
+          <Text style={styles.radarTitulo}>Solicitudes cercanas</Text>
+          {solicitudesCercanas.length === 0 ? (
+            <Text style={styles.vacio}>
+              Aún no hay solicitudes a menos de {DISTANCIA_MAX_KM} km de tu
+              ubicación.
+            </Text>
+          ) : (
+            solicitudesCercanas.map(({ solicitud, distanciaKm }) => {
+              const ofertada = ofertasEnviadas.has(solicitud.id);
+              return (
+                <View key={solicitud.id} style={styles.tarjetaSolicitud}>
+                  <Text style={styles.solicitudOrigen}>
+                    Origen: {solicitud.origen_lat.toFixed(5)},{' '}
+                    {solicitud.origen_lng.toFixed(5)}
+                  </Text>
+                  <Text style={styles.solicitudDetalle}>
+                    Destino: {solicitud.destino_lat.toFixed(5)},{' '}
+                    {solicitud.destino_lng.toFixed(5)}
+                  </Text>
+                  <View style={styles.filaPrecio}>
+                    <Text style={styles.solicitudPrecio}>
+                      S/ {Number(solicitud.precio_inicial).toFixed(2)}
+                    </Text>
+                    <Text style={styles.solicitudDistancia}>
+                      {distanciaKm < 1
+                        ? `${Math.round(distanciaKm * 1000)} m`
+                        : `${distanciaKm.toFixed(1)} km`}
+                    </Text>
+                  </View>
+
+                  {ofertada ? (
+                    <Text style={styles.ofertada}>Oferta enviada ✓</Text>
+                  ) : (
+                    <>
+                      {contraofertaId === solicitud.id ? (
+                        <Input
+                          etiqueta="Tu contraoferta (S/)"
+                          value={precioContraoferta}
+                          onChangeText={setPrecioContraoferta}
+                          keyboardType="decimal-pad"
+                          placeholder="S/ 6.00"
+                          testID="input-contraoferta"
+                          style={styles.inputContraoferta}
+                        />
+                      ) : null}
+                      <View style={styles.filaBotones}>
+                        <Button
+                          label={`Aceptar (S/ ${Number(
+                            solicitud.precio_inicial,
+                          ).toFixed(2)})`}
+                          onPress={() => void aceptarSolicitud(solicitud)}
+                          cargando={operando}
+                          estilo={styles.botonOferta}
+                        />
+                        {contraofertaId === solicitud.id ? (
+                          <Button
+                            label="Enviar contraoferta"
+                            onPress={() => void confirmarContraoferta(solicitud)}
+                            cargando={operando}
+                            estilo={styles.botonOferta}
+                          />
+                        ) : (
+                          <Button
+                            label="Contraofertar"
+                            variante="secundario"
+                            onPress={() => abrirContraoferta(solicitud)}
+                            estilo={styles.botonOferta}
+                          />
+                        )}
+                      </View>
+                    </>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </View>
+      ) : null}
+
       <Pressable onPress={() => void cerrarSesion()} style={styles.logout}>
         <Text style={styles.logoutTexto}>Cerrar sesión</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -92,11 +332,14 @@ const styles = StyleSheet.create({
   contenedor: {
     flex: 1,
     backgroundColor: colores.fondo,
+  },
+  contenido: {
     padding: 24,
-    justifyContent: 'space-between',
+    paddingBottom: 32,
   },
   cabecera: {
     marginTop: 8,
+    marginBottom: 16,
   },
   saludo: {
     fontSize: 16,
@@ -108,8 +351,6 @@ const styles = StyleSheet.create({
     color: colores.texto,
   },
   central: {
-    flex: 1,
-    justifyContent: 'center',
     maxWidth: 420,
     width: '100%',
     alignSelf: 'center',
@@ -160,9 +401,76 @@ const styles = StyleSheet.create({
     color: colores.exito,
     textAlign: 'center',
   },
+  radar: {
+    maxWidth: 420,
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 24,
+  },
+  radarTitulo: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.texto,
+    marginBottom: 12,
+  },
+  vacio: {
+    color: colores.textoSuave,
+  },
+  tarjetaSolicitud: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 16,
+    marginBottom: 12,
+    backgroundColor: '#FAFAFA',
+  },
+  solicitudOrigen: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colores.texto,
+  },
+  solicitudDetalle: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    marginTop: 4,
+  },
+  filaPrecio: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  solicitudPrecio: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.primario,
+  },
+  solicitudDistancia: {
+    fontSize: 13,
+    color: colores.textoSuave,
+  },
+  filaBotones: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  botonOferta: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 8,
+  },
+  inputContraoferta: {
+    marginBottom: 12,
+  },
+  ofertada: {
+    color: colores.exito,
+    fontWeight: '600',
+  },
   logout: {
     alignSelf: 'center',
     padding: 12,
+    marginTop: 8,
   },
   logoutTexto: {
     color: colores.textoSuave,
