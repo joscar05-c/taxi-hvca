@@ -19,5 +19,10 @@ export { PantallaCentrada, Etiqueta, colores } from './ui/theme';
 // Hooks compartidos
 export { useAuth } from './hooks/useAuth';
 export type { UseAuthResult } from './hooks/useAuth';
+export { useAuthInit } from './hooks/useAuthInit';
 export { useLocation } from './hooks/useLocation';
 export type { UseLocationResult } from './hooks/useLocation';
+
+// Estado global
+export { useAuthStore } from './store/useAuthStore';
+export type { AuthState } from './store/useAuthStore';
