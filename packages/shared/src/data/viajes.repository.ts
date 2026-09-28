@@ -153,4 +153,31 @@ export const viajesRepository = {
       void supabase.removeChannel(canal);
     };
   },
+
+  /**
+   * Escucha en tiempo real los cambios de estado de una solicitud (UPDATE en
+   * `solicitudes_viaje`). Devuelve una función para cancelar la suscripción.
+   */
+  suscribirCambiosSolicitud(
+    solicitudId: string,
+    callback: (solicitud: SolicitudViaje) => void,
+  ): () => void {
+    const canal = supabase
+      .channel(`solicitud-${solicitudId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'solicitudes_viaje',
+          filter: `id=eq.${solicitudId}`,
+        },
+        (payload) => callback(payload.new as SolicitudViaje),
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(canal);
+    };
+  },
 };

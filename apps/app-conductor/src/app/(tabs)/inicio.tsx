@@ -54,8 +54,14 @@ export default function PantallaInicio() {
   const [ofertasEnviadas, setOfertasEnviadas] = useState<Set<string>>(
     new Set(),
   );
+  const [viajeActivo, setViajeActivo] = useState<SolicitudViaje | null>(null);
   const [contraofertaId, setContraofertaId] = useState<string | null>(null);
   const [precioContraoferta, setPrecioContraoferta] = useState('');
+  const [vehiculo, setVehiculo] = useState('');
+
+  useEffect(() => {
+    if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
+  }, [perfil?.vehiculo]);
 
   // Posición del conductor: la del primer plano si ya la tenemos; si no,
   // la última `ubicacion_actual` (EWKT) persistida en la BD.
@@ -102,6 +108,26 @@ export default function PantallaInicio() {
     if (!isTracking) return;
     return viajesRepository.suscribirNuevasSolicitudes(manejarNuevaSolicitud);
   }, [isTracking, manejarNuevaSolicitud]);
+
+  // Por cada solicitud con oferta enviada, escuchamos si el pasajero la
+  // acepta. La suscripción se cancela al cambiar la lista o al desmontar, y
+  // especialmente cuando el viaje termina (se quita el id al finalizar).
+  const idConductor = sesion?.user?.id;
+  useEffect(() => {
+    const limpiadores: Array<() => void> = [];
+    ofertasEnviadas.forEach((solicitudId) => {
+      limpiadores.push(
+        viajesRepository.suscribirCambiosSolicitud(solicitudId, (solicitud) => {
+          if (solicitud.estado === 'aceptado' && solicitud.conductor_id === idConductor) {
+            setViajeActivo(solicitud);
+          }
+        }),
+      );
+    });
+    return () => {
+      limpiadores.forEach((limpiar) => limpiar());
+    };
+  }, [ofertasEnviadas, idConductor]);
 
   async function alternarConexion() {
     setMensaje(null);
@@ -196,6 +222,63 @@ export default function PantallaInicio() {
     }
   }
 
+  async function llegueAlOrigen() {
+    if (!viajeActivo) return;
+    setOperando(true);
+    setError(null);
+    setMensaje(null);
+    try {
+      const actualizada = await viajesRepository.actualizarEstadoViaje(
+        viajeActivo.id,
+        'en_camino_origen',
+      );
+      setViajeActivo(actualizada);
+      setMensaje('Avisaste al pasajero que llegaste al origen.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo actualizar el viaje.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  async function finalizarViaje() {
+    if (!viajeActivo) return;
+    setOperando(true);
+    setError(null);
+    setMensaje(null);
+    try {
+      const idViaje = viajeActivo.id;
+      await viajesRepository.actualizarEstadoViaje(idViaje, 'completado');
+      setViajeActivo(null);
+      setOfertasEnviadas((prev) => {
+        const nuevo = new Set(prev);
+        nuevo.delete(idViaje);
+        return nuevo;
+      });
+      setContraofertaId(null);
+      setPrecioContraoferta('');
+      setMensaje('Viaje completado. De nuevo en el radar.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo finalizar el viaje.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  async function guardarVehiculo() {
+    setError(null);
+    setMensaje(null);
+    setOperando(true);
+    try {
+      await authRepository.actualizarVehiculo(vehiculo.trim());
+      setMensaje('Vehículo guardado.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo guardar el vehículo.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
   return (
     <ScrollView
       style={styles.contenedor}
@@ -240,8 +323,63 @@ export default function PantallaInicio() {
         {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
       </View>
 
-      {isTracking ? (
+      {viajeActivo ? (
         <View style={styles.radar}>
+          <View style={styles.tarjetaViajeActivo}>
+            <Text style={styles.viajeTitulo}>Viaje Activo</Text>
+            <Text style={styles.viajeOrigen}>
+              Origen: {viajeActivo.origen_lat.toFixed(5)},{' '}
+              {viajeActivo.origen_lng.toFixed(5)}
+            </Text>
+            <Text style={styles.viajeDetalle}>
+              Destino: {viajeActivo.destino_lat.toFixed(5)},{' '}
+              {viajeActivo.destino_lng.toFixed(5)}
+            </Text>
+            <Text style={styles.viajePrecio}>
+              S/{' '}
+              {Number(
+                viajeActivo.precio_final ?? viajeActivo.precio_inicial,
+              ).toFixed(2)}
+            </Text>
+            <View style={styles.filaBotones}>
+              <Button
+                label="Llegué al origen"
+                onPress={() => void llegueAlOrigen()}
+                cargando={operando}
+                estilo={styles.botonViaje}
+              />
+              <Button
+                label="Finalizar Viaje"
+                variante="peligro"
+                onPress={() => void finalizarViaje()}
+                cargando={operando}
+                estilo={styles.botonViaje}
+              />
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {isTracking && !viajeActivo ? (
+        <View style={styles.radar}>
+          <View style={styles.bloqueVehiculo}>
+            <Text style={styles.radarTitulo}>Mi vehículo</Text>
+            <Input
+              etiqueta="Vehículo (marca, placa)"
+              value={vehiculo}
+              onChangeText={setVehiculo}
+              placeholder="Toyota Corolla · ABC-123"
+              testID="input-vehiculo"
+              style={styles.inputVehiculo}
+            />
+            <Button
+              label="Guardar vehículo"
+              variante="secundario"
+              onPress={() => void guardarVehiculo()}
+              cargando={operando}
+              estilo={styles.botonGuardarVehiculo}
+            />
+          </View>
           <Text style={styles.radarTitulo}>Solicitudes cercanas</Text>
           {solicitudesCercanas.length === 0 ? (
             <Text style={styles.vacio}>
@@ -466,6 +604,54 @@ const styles = StyleSheet.create({
   ofertada: {
     color: colores.exito,
     fontWeight: '600',
+  },
+  tarjetaViajeActivo: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colores.primario,
+    padding: 16,
+    backgroundColor: '#FAFAFA',
+  },
+  viajeTitulo: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.primario,
+    marginBottom: 12,
+  },
+  viajeOrigen: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colores.texto,
+  },
+  viajeDetalle: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    marginTop: 4,
+  },
+  viajePrecio: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.primario,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  botonViaje: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 8,
+  },
+  bloqueVehiculo: {
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  inputVehiculo: {
+    marginBottom: 12,
+  },
+  botonGuardarVehiculo: {
+    minHeight: 44,
   },
   logout: {
     alignSelf: 'center',

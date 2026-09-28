@@ -22,6 +22,7 @@ export type Profile = {
   estado: RiderStatus;
   esta_conectado: boolean;
   ubicacion_actual: string | null;
+  vehiculo: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -108,11 +109,17 @@ export type Database = {
         Row: Profile;
         Insert: Omit<
           Profile,
-          'id' | 'created_at' | 'updated_at' | 'esta_conectado' | 'ubicacion_actual'
+          | 'id'
+          | 'created_at'
+          | 'updated_at'
+          | 'esta_conectado'
+          | 'ubicacion_actual'
+          | 'vehiculo'
         > & {
           id: string;
           esta_conectado?: boolean;
           ubicacion_actual?: string | null;
+          vehiculo?: string | null;
         };
         Update: Partial<Profile>;
         Relationships: [];

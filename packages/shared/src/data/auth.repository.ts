@@ -16,6 +16,32 @@ export const authRepository = {
     return data;
   },
 
+  async obtenerPerfil(usuarioId: string): Promise<Profile | null> {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', usuarioId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  },
+
+  async actualizarVehiculo(vehiculo: string): Promise<Profile> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Sesión no iniciada.');
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ vehiculo })
+      .eq('id', user.id)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return data;
+  },
+
   async actualizarEstado(estado: Profile['estado']): Promise<Profile> {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Sesión no iniciada.');
