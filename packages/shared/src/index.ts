@@ -8,6 +8,10 @@ export { getEnvVars } from './data/supabase';
 export type { EnvVars } from './data/supabase';
 export { authRepository } from './data/auth.repository';
 export { rideRepository } from './data/ride.repository';
+export { viajesRepository } from './data/viajes.repository';
+
+// Utilidades
+export { calcularDistanciaHaversine } from './utils/geo';
 
 // Capa de presentación reutilizable
 export { Button } from './ui/Button';

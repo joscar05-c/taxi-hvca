@@ -2,6 +2,12 @@ export type UserRole = 'pasajero' | 'conductor';
 
 export type RiderStatus = 'disponible' | 'en_viaje' | 'offline';
 
+/** Coordenadas geográficas (WGS84). */
+export type Coordenadas = {
+  latitude: number;
+  longitude: number;
+};
+
 /**
  * Perfil de usuario en Supabase. La columna `id` se vincula 1:1 con
  * `auth.users.id`. Debe ser `type` (no `interface`): las interfaces no
@@ -27,6 +33,42 @@ export type RideStatus =
   | 'en_viaje'
   | 'finalizada'
   | 'cancelada';
+
+/** Estados del flujo en tiempo real (tabla `solicitudes_viaje`). */
+export type SolicitudEstado =
+  | 'buscando'
+  | 'aceptado'
+  | 'en_ruta_al_pasajero'
+  | 'en_viaje'
+  | 'finalizada'
+  | 'cancelada';
+
+/**
+ * Solicitud de viaje publicada por un pasajero. El conductor hace ofertas
+ * y el pasajero elige una (`precio_final` + `conductor_id` al aceptar).
+ */
+export type SolicitudViaje = {
+  id: string;
+  pasajero_id: string;
+  origen_lat: number;
+  origen_lng: number;
+  destino_lat: number;
+  destino_lng: number;
+  precio_inicial: number;
+  estado: SolicitudEstado;
+  conductor_id: string | null;
+  precio_final: number | null;
+  created_at: string;
+};
+
+/** Oferta de precio hecha por un conductor para una solicitud. */
+export type OfertaConductor = {
+  id: string;
+  solicitud_id: string;
+  conductor_id: string;
+  precio: number;
+  created_at: string;
+};
 
 export type RideRequest = {
   id: string;
@@ -71,6 +113,21 @@ export type Database = {
           'id' | 'estado' | 'conductor_id' | 'created_at'
         >;
         Update: Partial<Pick<RideRequest, 'estado' | 'conductor_id'>>;
+        Relationships: [];
+      };
+      solicitudes_viaje: {
+        Row: SolicitudViaje;
+        Insert: Omit<
+          SolicitudViaje,
+          'id' | 'estado' | 'created_at' | 'conductor_id' | 'precio_final'
+        >;
+        Update: Partial<SolicitudViaje>;
+        Relationships: [];
+      };
+      ofertas_conductores: {
+        Row: OfertaConductor;
+        Insert: Omit<OfertaConductor, 'id' | 'created_at'>;
+        Update: Partial<OfertaConductor>;
         Relationships: [];
       };
     };
