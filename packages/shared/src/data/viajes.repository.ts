@@ -1,4 +1,9 @@
-import type { Coordenadas, OfertaConductor, SolicitudViaje } from '../domain/types';
+import type {
+  Coordenadas,
+  OfertaConductor,
+  SolicitudEnProgreso,
+  SolicitudViaje,
+} from '../domain/types';
 import { supabase } from './supabaseClient';
 
 /** Canal Realtime compartido para las solicitudes nuevas. */
@@ -69,6 +74,25 @@ export const viajesRepository = {
         conductor_id: conductorId,
         precio_final: precioFinal,
       })
+      .eq('id', solicitudId)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return data;
+  },
+
+  /**
+   * Avanza el ciclo de vida del viaje: 'aceptado', 'en_camino_origen',
+   * 'en_curso' o 'completado'.
+   */
+  async actualizarEstadoViaje(
+    solicitudId: string,
+    nuevoEstado: SolicitudEnProgreso,
+  ): Promise<SolicitudViaje> {
+    const { data, error } = await supabase
+      .from('solicitudes_viaje')
+      .update({ estado: nuevoEstado })
       .eq('id', solicitudId)
       .select('*')
       .single();

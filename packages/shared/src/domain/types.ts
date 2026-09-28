@@ -38,10 +38,21 @@ export type RideStatus =
 export type SolicitudEstado =
   | 'buscando'
   | 'aceptado'
-  | 'en_ruta_al_pasajero'
-  | 'en_viaje'
-  | 'finalizada'
+  | 'en_camino_origen'
+  | 'en_curso'
+  | 'completado'
   | 'cancelada';
+
+/**
+ * Estados de avance permitidos por `actualizarEstadoViaje`: el viaje ya tiene
+ * conductor (match), el conductor va por el pasajero, el pasajero subió o el
+ * viaje terminó.
+ */
+export type SolicitudEnProgreso =
+  | 'aceptado'
+  | 'en_camino_origen'
+  | 'en_curso'
+  | 'completado';
 
 /**
  * Solicitud de viaje publicada por un pasajero. El conductor hace ofertas
