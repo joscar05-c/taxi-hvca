@@ -1,29 +1,48 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import MapView from 'react-native-maps';
 
-import { Button, colores, supabase, useForegroundLocation } from '@hvca/shared';
-
-interface CoordenadasCentro {
-  latitude: number;
-  longitude: number;
-}
+import {
+  Button,
+  Input,
+  colores,
+  supabase,
+  useAuth,
+  useForegroundLocation,
+  viajesRepository,
+  type Coordenadas,
+  type OfertaConductor,
+  type SolicitudViaje,
+} from '@hvca/shared';
 
 const ZOOM_INICIAL = 0.01;
 
 export default function PantallaMapa() {
-  const { coords, loading, error, requestPermissionAndLocate } =
+  const { sesion } = useAuth();
+  const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
     useForegroundLocation();
-  const [centroMapa, setCentroMapa] = useState<CoordenadasCentro | null>(null);
-  const [originCoords, setOriginCoords] = useState<CoordenadasCentro | null>(null);
-  const [confirmacion, setConfirmacion] = useState(false);
+  const [centroMapa, setCentroMapa] = useState<Coordenadas | null>(null);
+  const [originCoords, setOriginCoords] = useState<Coordenadas | null>(null);
+  const [destinoCoords, setDestinoCoords] = useState<Coordenadas | null>(null);
+  const [tarifa, setTarifa] = useState('');
+  const [solicitud, setSolicitud] = useState<SolicitudViaje | null>(null);
+  const [ofertas, setOfertas] = useState<OfertaConductor[]>([]);
+  const [aceptada, setAceptada] = useState(false);
+  const [operando, setOperando] = useState(false);
+  const [mensaje, setMensaje] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Solicita permiso y ubicación al abrir la pantalla.
   useEffect(() => {
     void requestPermissionAndLocate();
   }, [requestPermissionAndLocate]);
 
-  // Cuando llega la ubicación, centramos el mapa por primera vez.
   useEffect(() => {
     if (coords && !centroMapa) {
       setCentroMapa({
@@ -33,10 +52,82 @@ export default function PantallaMapa() {
     }
   }, [coords, centroMapa]);
 
+  // Suscripción en tiempo real a las ofertas de la solicitud activa.
+  useEffect(() => {
+    if (!solicitud) return;
+    setOfertas([]);
+    return viajesRepository.suscribirOfertas(solicitud.id, (oferta) => {
+      setOfertas((prev) => [...prev, oferta]);
+    });
+  }, [solicitud]);
+
   function fijarOrigen() {
     if (!centroMapa) return;
     setOriginCoords(centroMapa);
-    setConfirmacion(true);
+    setMensaje('Origen fijado. Si quieres, mueve el mapa para fijar el destino.');
+    setError(null);
+  }
+
+  function fijarDestino() {
+    if (!centroMapa) return;
+    setDestinoCoords(centroMapa);
+    setMensaje('Destino fijado.');
+    setError(null);
+  }
+
+  async function pedirTaxi() {
+    if (!originCoords || !sesion?.user) return;
+
+    const precio = parseFloat(tarifa.trim().replace(',', '.'));
+    if (Number.isNaN(precio) || precio <= 0) {
+      setError('Ingresa una tarifa válida, por ejemplo 5.00.');
+      return;
+    }
+
+    setOperando(true);
+    setError(null);
+    setMensaje(null);
+    try {
+      const creada = await viajesRepository.crearSolicitud(
+        sesion.user.id,
+        originCoords,
+        destinoCoords ?? centroMapa ?? originCoords,
+        precio,
+      );
+      setSolicitud(creada);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo crear la solicitud.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  async function aceptarOferta(oferta: OfertaConductor) {
+    if (!solicitud) return;
+    setOperando(true);
+    setError(null);
+    setMensaje(null);
+    try {
+      await viajesRepository.aceptarOferta(
+        solicitud.id,
+        oferta.conductor_id,
+        oferta.precio,
+      );
+      setAceptada(true);
+      setMensaje('Oferta aceptada. El conductor va en camino.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo aceptar la oferta.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  function cancelarSolicitud() {
+    setSolicitud(null);
+    setOfertas([]);
+    setAceptada(false);
+    setMensaje(null);
+    setError(null);
   }
 
   return (
@@ -66,7 +157,7 @@ export default function PantallaMapa() {
           ) : (
             <>
               <Text style={styles.estadoTexto}>
-                {error ?? 'No fue posible obtener tu ubicación.'}
+                {errorUbicacion ?? 'No fue posible obtener tu ubicación.'}
               </Text>
               <Button
                 label="Permitir ubicación"
@@ -93,20 +184,116 @@ export default function PantallaMapa() {
         <Text style={styles.logoutTexto}>Cerrar sesión</Text>
       </Pressable>
 
-      {/* Barra inferior */}
+      {/* Barra inferior: preparación, búsqueda u ofertas */}
       <View style={styles.barraInferior}>
-        {confirmacion && originCoords ? (
-          <Text style={styles.confirmacion}>
-            Origen fijado en {originCoords.latitude.toFixed(5)},{' '}
-            {originCoords.longitude.toFixed(5)}
-          </Text>
-        ) : null}
-        <Button
-          label="Fijar Origen"
-          onPress={fijarOrigen}
-          deshabilitado={!centroMapa}
-          cargando={loading}
-        />
+        {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {!solicitud ? (
+          !originCoords ? (
+            <>
+              <Text style={styles.ayuda}>
+                Mueve el mapa hasta tu ubicación de recogida y fija el origen.
+              </Text>
+              <Button
+                label="Fijar Origen"
+                onPress={fijarOrigen}
+                deshabilitado={!centroMapa}
+              />
+            </>
+          ) : (
+            <>
+              <Text style={styles.ayuda}>
+                Origen: {originCoords.latitude.toFixed(5)},{' '}
+                {originCoords.longitude.toFixed(5)}
+              </Text>
+              {destinoCoords ? (
+                <Text style={styles.ayuda}>
+                  Destino: {destinoCoords.latitude.toFixed(5)},{' '}
+                  {destinoCoords.longitude.toFixed(5)}
+                </Text>
+              ) : (
+                <Button
+                  label="Fijar Destino"
+                  variante="secundario"
+                  onPress={fijarDestino}
+                  estilo={styles.botonMitad}
+                />
+              )}
+              <Input
+                etiqueta="Tu tarifa propuesta"
+                value={tarifa}
+                onChangeText={setTarifa}
+                keyboardType="decimal-pad"
+                placeholder="S/ 5.00"
+                testID="input-tarifa"
+                style={styles.inputTarifa}
+              />
+              <Button
+                label="Pedir Taxi"
+                onPress={() => void pedirTaxi()}
+                cargando={operando}
+                deshabilitado={!tarifa.trim()}
+                estilo={styles.boton}
+              />
+            </>
+          )
+        ) : !aceptada ? (
+          <>
+            <Text style={styles.buscando}>Buscando conductores...</Text>
+            <Text style={styles.ayuda}>
+              Tu tarifa ofrecida: S/ {Number(solicitud.precio_inicial).toFixed(2)}
+            </Text>
+            {ofertas.length === 0 ? (
+              <Text style={styles.ayuda}>
+                Aún no llegan ofertas. Los conductores cercanos podrán participar.
+              </Text>
+            ) : (
+              <ScrollView
+                style={styles.listaOfertas}
+                contentContainerStyle={styles.listaContenido}
+              >
+                {ofertas.map((oferta) => (
+                  <View key={oferta.id} style={styles.tarjetaOferta}>
+                    <View style={styles.tarjetaTexto}>
+                      <Text style={styles.ofertaTitulo}>
+                        Conductor · {oferta.conductor_id.slice(0, 8)}
+                      </Text>
+                      <Text style={styles.ofertaPrecio}>
+                        S/ {Number(oferta.precio).toFixed(2)}
+                      </Text>
+                    </View>
+                    <Button
+                      label="Aceptar"
+                      onPress={() => void aceptarOferta(oferta)}
+                      cargando={operando}
+                      estilo={styles.botonAceptar}
+                    />
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+            <Button
+              label="Cancelar solicitud"
+              variante="secundario"
+              onPress={cancelarSolicitud}
+              estilo={styles.boton}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.aceptada}>¡Viaje aceptado!</Text>
+            <Text style={styles.ayuda}>
+              El conductor va en camino. Te avisaremos cuando llegue a la
+              recogida.
+            </Text>
+            <Button
+              label="Nueva solicitud"
+              onPress={cancelarSolicitud}
+              estilo={styles.boton}
+            />
+          </>
+        )}
       </View>
     </View>
   );
@@ -201,10 +388,76 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colores.borde,
   },
-  confirmacion: {
+  mensaje: {
     color: colores.exito,
-    textAlign: 'center',
     marginBottom: 8,
     fontWeight: '600',
+  },
+  error: {
+    color: colores.peligro,
+    marginBottom: 8,
+  },
+  ayuda: {
+    color: colores.textoSuave,
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  botonMitad: {
+    marginBottom: 12,
+  },
+  inputTarifa: {
+    marginBottom: 12,
+  },
+  boton: {
+    marginTop: 4,
+  },
+  buscando: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.texto,
+    marginBottom: 4,
+  },
+  listaOfertas: {
+    maxHeight: 180,
+    marginVertical: 8,
+  },
+  listaContenido: {
+    gap: 8,
+  },
+  tarjetaOferta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: '#FAFAFA',
+  },
+  tarjetaTexto: {
+    flex: 1,
+    marginRight: 12,
+  },
+  ofertaTitulo: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colores.texto,
+  },
+  ofertaPrecio: {
+    fontSize: 14,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
+  botonAceptar: {
+    minHeight: 40,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  aceptada: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colores.exito,
+    marginBottom: 4,
   },
 });
