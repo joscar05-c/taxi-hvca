@@ -1,0 +1,29 @@
+# Dependencias
+node_modules/
+*.tsbuildinfo
+
+# Expo / React Native
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Entornos
+.env
+.env.local
+.env.*.local
+
+# Nativos generados (Continuous Native Generation: no editar a mano)
+/android
+/ios
+
+# npm
+npm-debug.log*
+.lock-wscript
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

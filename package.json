@@ -1,0 +1,26 @@
+{
+  "name": "taxi-hvca",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma de movilidad tipo InDrive — monorepo Expo + Supabase",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start:pasajero": "npm run start -w app-pasajero",
+    "start:conductor": "npm run start -w app-conductor",
+    "android:pasajero": "npm run android -w app-pasajero",
+    "android:conductor": "npm run android -w app-conductor",
+    "ios:pasajero": "npm run ios -w app-pasajero",
+    "ios:conductor": "npm run ios -w app-conductor",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  }
+}

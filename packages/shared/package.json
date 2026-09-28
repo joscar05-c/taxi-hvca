@@ -1,0 +1,26 @@
+{
+  "name": "@hvca/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Paquete compartido: capa de datos (Supabase), dominio, UI y hooks.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2"
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "expo-location": "~57.0.20",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  }
+}
