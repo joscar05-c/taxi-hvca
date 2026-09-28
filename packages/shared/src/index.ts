@@ -3,7 +3,8 @@ export * from './domain/types';
 export * from './domain/fare';
 
 // Capa de datos (repositorios y cliente Supabase)
-export { getSupabaseClient, getEnvVars } from './data/supabase';
+export { supabase, getSupabaseClient } from './data/supabaseClient';
+export { getEnvVars } from './data/supabase';
 export type { EnvVars } from './data/supabase';
 export { authRepository } from './data/auth.repository';
 export { rideRepository } from './data/ride.repository';
