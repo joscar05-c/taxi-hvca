@@ -21,11 +21,11 @@ export function Sidebar() {
   const { user, profile, logout } = useAuth();
 
   const navItems = [
-    { href: '/', label: 'Panel General', icon: LayoutDashboard },
-    { href: '/usuarios', label: 'Usuarios y Perfiles', icon: Users },
-    { href: '/viajes', label: 'Viajes en Vivo', icon: Car },
-    { href: '/ofertas', label: 'Ofertas Conductores', icon: BadgeDollarSign },
-    { href: '/configuracion', label: 'Configuración', icon: Settings },
+    { href: '/admin', label: 'Panel General', icon: LayoutDashboard },
+    { href: '/admin/usuarios', label: 'Usuarios y Perfiles', icon: Users },
+    { href: '/admin/viajes', label: 'Viajes en Vivo', icon: Car },
+    { href: '/admin/ofertas', label: 'Ofertas Conductores', icon: BadgeDollarSign },
+    { href: '/admin/configuracion', label: 'Configuración', icon: Settings },
   ];
 
   return (

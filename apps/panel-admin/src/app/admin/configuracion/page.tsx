@@ -2,17 +2,14 @@
 
 import React, { useState } from 'react';
 import {
-  Settings,
-  ShieldCheck,
   DollarSign,
   Save,
   Server,
-  Database,
   CheckCircle,
 } from 'lucide-react';
 
-import { AuthGuard } from '../../components/AuthGuard';
-import { Header } from '../../components/Header';
+import { AuthGuard } from '@/components/AuthGuard';
+import { Header } from '@/components/Header';
 
 export default function ConfiguracionPage() {
   const [tarifaBase, setTarifaBase] = useState('3.50');

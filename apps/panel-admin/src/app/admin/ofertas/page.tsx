@@ -2,12 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
-import { BadgeDollarSign, Search, Car, Calendar } from 'lucide-react';
+import { BadgeDollarSign, Search } from 'lucide-react';
 
-import { db } from '../../lib/firebase';
-import type { OfertaConductor } from '../../lib/types';
-import { AuthGuard } from '../../components/AuthGuard';
-import { Header } from '../../components/Header';
+import { db } from '@/lib/firebase';
+import type { OfertaConductor } from '@/lib/types';
+import { AuthGuard } from '@/components/AuthGuard';
+import { Header } from '@/components/Header';
 
 export default function OfertasPage() {
   const [ofertas, setOfertas] = useState<OfertaConductor[]>([]);

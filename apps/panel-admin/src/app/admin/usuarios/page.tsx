@@ -11,22 +11,19 @@ import {
   Users,
   Search,
   Filter,
-  Shield,
   Car,
   Phone,
   Star,
-  CheckCircle,
-  XCircle,
   Edit2,
   Save,
   X,
 } from 'lucide-react';
 
-import { db } from '../../lib/firebase';
-import type { Profile, UserRole } from '../../lib/types';
-import { AuthGuard } from '../../components/AuthGuard';
-import { Header } from '../../components/Header';
-import { StatusBadge } from '../../components/StatusBadge';
+import { db } from '@/lib/firebase';
+import type { Profile, UserRole } from '@/lib/types';
+import { AuthGuard } from '@/components/AuthGuard';
+import { Header } from '@/components/Header';
+import { StatusBadge } from '@/components/StatusBadge';
 
 export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<Profile[]>([]);

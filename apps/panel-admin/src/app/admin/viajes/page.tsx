@@ -17,15 +17,13 @@ import {
   ExternalLink,
   Ban,
   CheckCircle2,
-  AlertTriangle,
-  ArrowRight,
 } from 'lucide-react';
 
-import { db } from '../../lib/firebase';
-import type { SolicitudViaje, SolicitudEstado } from '../../lib/types';
-import { AuthGuard } from '../../components/AuthGuard';
-import { Header } from '../../components/Header';
-import { StatusBadge } from '../../components/StatusBadge';
+import { db } from '@/lib/firebase';
+import type { SolicitudViaje, SolicitudEstado } from '@/lib/types';
+import { AuthGuard } from '@/components/AuthGuard';
+import { Header } from '@/components/Header';
+import { StatusBadge } from '@/components/StatusBadge';
 
 export default function ViajesPage() {
   const [viajes, setViajes] = useState<SolicitudViaje[]>([]);
