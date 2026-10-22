@@ -15,6 +15,7 @@
     "ios:pasajero": "npm run ios -w app-pasajero",
     "ios:conductor": "npm run ios -w app-conductor",
     "dev:admin": "npm run dev -w panel-admin",
+    "build": "npm run build:admin",
     "build:admin": "npm run build -w panel-admin",
     "start:admin": "npm run start -w panel-admin",
     "typecheck": "npm run typecheck --workspaces --if-present",
