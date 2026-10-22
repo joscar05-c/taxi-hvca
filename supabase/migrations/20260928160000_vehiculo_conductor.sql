@@ -1,2 +1,2 @@
-alter table public.perfiles
+alter table public.profiles
   add column if not exists vehiculo text;
