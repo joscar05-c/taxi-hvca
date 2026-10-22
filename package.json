@@ -21,6 +21,8 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "typescript": "~6.0.3"
   }
 }
