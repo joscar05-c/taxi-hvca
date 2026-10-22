@@ -18,6 +18,9 @@ export type Profile = {
   rol: UserRole;
   nombre: string;
   telefono: string;
+  telefono_verificado?: boolean;
+  email?: string | null;
+  foto_url?: string | null;
   calificacion_promedio: number;
   estado: RiderStatus;
   esta_conectado: boolean;
@@ -25,6 +28,17 @@ export type Profile = {
   vehiculo: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** Estado y registro del código SMS para verificación de número telefónico. */
+export type VerificacionTelefono = {
+  usuario_id: string;
+  telefono: string;
+  codigo: string;
+  expira_en: string;
+  intentos: number;
+  verificado: boolean;
+  created_at: string;
 };
 
 /** @deprecated Usar `SolicitudEstado`. */

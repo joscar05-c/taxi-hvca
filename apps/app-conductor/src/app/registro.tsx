@@ -5,16 +5,19 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  View,
 } from 'react-native';
 import { Link, Redirect } from 'expo-router';
 
 import {
   Button,
+  BotonGoogle,
   Input,
   PantallaCentrada,
   authRepository,
   colores,
   useAuthStore,
+  useGoogleLogin,
 } from '@hvca/shared';
 
 export default function PantallaRegistro() {
@@ -25,7 +28,14 @@ export default function PantallaRegistro() {
   const [password, setPassword] = useState('');
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmacionEnviada, setConfirmacionEnviada] = useState(false);
+
+  const {
+    iniciarConGoogle,
+    cargando: cargandoGoogle,
+    error: errorGoogle,
+  } = useGoogleLogin('conductor');
+
+  const errorVisible = error || errorGoogle;
 
   if (session) {
     return <Redirect href="/(tabs)/inicio" />;
@@ -48,8 +58,6 @@ export default function PantallaRegistro() {
         telefono: telefono.trim(),
         rol: 'conductor',
       });
-
-      setConfirmacionEnviada(false);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo crear la cuenta.');
@@ -70,15 +78,29 @@ export default function PantallaRegistro() {
         >
           <Text style={styles.titulo}>Crea tu cuenta</Text>
           <Text style={styles.subtitulo}>
-            Regístrate como conductor de HVCA.
+            Regístrate como conductor para trabajar en Huancavelica.
           </Text>
+
+          {/* Botón de Google Principal */}
+          <BotonGoogle
+            onPress={iniciarConGoogle}
+            cargando={cargandoGoogle}
+            label="Registrarse con Google"
+          />
+
+          {/* Separador */}
+          <View style={styles.separadorContainer}>
+            <View style={styles.linea} />
+            <Text style={styles.textoSeparador}>o con correo electrónico</Text>
+            <View style={styles.linea} />
+          </View>
 
           <Input
             etiqueta="Nombre completo"
             value={nombre}
             onChangeText={setNombre}
-            placeholder="Juan Pérez"
             autoComplete="name"
+            placeholder="Carlos Rojas"
             testID="registro-nombre"
           />
           <Input
@@ -87,7 +109,7 @@ export default function PantallaRegistro() {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoComplete="email"
-            placeholder="tucorreo@ejemplo.com"
+            placeholder="carlos@ejemplo.com"
             style={styles.campo}
             testID="registro-email"
           />
@@ -97,7 +119,7 @@ export default function PantallaRegistro() {
             onChangeText={setTelefono}
             keyboardType="phone-pad"
             autoComplete="tel"
-            placeholder="(55) 1234 5678"
+            placeholder="+51 984 123 456"
             style={styles.campo}
             testID="registro-telefono"
           />
@@ -112,15 +134,10 @@ export default function PantallaRegistro() {
             testID="registro-password"
           />
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          {confirmacionEnviada ? (
-            <Text style={styles.exito}>
-              Revisa tu correo para confirmar tu cuenta. Ya casi terminas.
-            </Text>
-          ) : null}
+          {errorVisible ? <Text style={styles.error}>{errorVisible}</Text> : null}
 
           <Button
-            label="Crear cuenta"
+            label="Crear cuenta de conductor"
             onPress={registrar}
             cargando={cargando}
             estilo={styles.boton}
@@ -140,6 +157,7 @@ const styles = StyleSheet.create({
   contenido: {
     width: '100%',
     maxWidth: 420,
+    paddingVertical: 16,
   },
   titulo: {
     fontSize: 28,
@@ -149,7 +167,7 @@ const styles = StyleSheet.create({
   subtitulo: {
     fontSize: 14,
     color: colores.textoSuave,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   campo: {
     marginTop: 12,
@@ -158,12 +176,23 @@ const styles = StyleSheet.create({
     color: colores.peligro,
     marginTop: 12,
   },
-  exito: {
-    color: colores.exito,
-    marginTop: 12,
-  },
   boton: {
     marginTop: 16,
+  },
+  separadorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+  linea: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colores.borde,
+  },
+  textoSeparador: {
+    paddingHorizontal: 12,
+    fontSize: 12,
+    color: colores.textoSuave,
   },
   enlace: {
     marginTop: 20,

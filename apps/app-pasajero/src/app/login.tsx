@@ -5,16 +5,19 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  View,
 } from 'react-native';
 import { Link, Redirect } from 'expo-router';
 
 import {
   Button,
+  BotonGoogle,
   Input,
   PantallaCentrada,
   authRepository,
   colores,
   useAuthStore,
+  useGoogleLogin,
 } from '@hvca/shared';
 
 export default function PantallaLogin() {
@@ -23,6 +26,14 @@ export default function PantallaLogin() {
   const [password, setPassword] = useState('');
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const {
+    iniciarConGoogle,
+    cargando: cargandoGoogle,
+    error: errorGoogle,
+  } = useGoogleLogin('pasajero');
+
+  const errorVisible = error || errorGoogle;
 
   // Si ya hay sesión, el área autenticada lo redirige a la ruta principal.
   if (session) {
@@ -85,13 +96,27 @@ export default function PantallaLogin() {
             style={styles.campo}
           />
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {errorVisible ? <Text style={styles.error}>{errorVisible}</Text> : null}
 
           <Button
             label="Entrar"
             onPress={iniciarSesion}
             cargando={cargando}
             estilo={styles.boton}
+          />
+
+          {/* Separador */}
+          <View style={styles.separadorContainer}>
+            <View style={styles.linea} />
+            <Text style={styles.textoSeparador}>o continúa con</Text>
+            <View style={styles.linea} />
+          </View>
+
+          {/* Botón de Google */}
+          <BotonGoogle
+            onPress={iniciarConGoogle}
+            cargando={cargandoGoogle}
+            label="Ingresar con Google"
           />
 
           <Link href="/registro" style={styles.enlace}>
@@ -128,6 +153,21 @@ const styles = StyleSheet.create({
   },
   boton: {
     marginTop: 16,
+  },
+  separadorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+  linea: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colores.borde,
+  },
+  textoSeparador: {
+    paddingHorizontal: 12,
+    fontSize: 12,
+    color: colores.textoSuave,
   },
   enlace: {
     marginTop: 20,

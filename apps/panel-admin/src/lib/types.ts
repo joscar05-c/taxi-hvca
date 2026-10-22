@@ -15,6 +15,7 @@ export interface Profile {
   rol: UserRole;
   nombre: string;
   telefono: string;
+  telefono_verificado?: boolean;
   email?: string;
   calificacion_promedio: number;
   estado: RiderStatus;
