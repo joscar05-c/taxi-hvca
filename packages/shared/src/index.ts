@@ -15,14 +15,20 @@ export { calcularDistanciaHaversine } from './utils/geo';
 // Capa de presentación reutilizable
 export { Button } from './ui/Button';
 export type { ButtonProps } from './ui/Button';
+export { BotonGoogle } from './ui/BotonGoogle';
+export type { BotonGoogleProps } from './ui/BotonGoogle';
 export { Input } from './ui/Input';
 export type { InputProps } from './ui/Input';
+export { SeccionVerificacionTelefono } from './ui/SeccionVerificacionTelefono';
+export type { SeccionVerificacionTelefonoProps } from './ui/SeccionVerificacionTelefono';
 export { PantallaCentrada, Etiqueta, colores } from './ui/theme';
 
 // Hooks compartidos
 export { useAuth } from './hooks/useAuth';
 export type { UseAuthResult } from './hooks/useAuth';
 export { useAuthInit } from './hooks/useAuthInit';
+export { useGoogleLogin } from './hooks/useGoogleLogin';
+export type { UseGoogleLoginResult } from './hooks/useGoogleLogin';
 export { useLocation } from './hooks/useLocation';
 export type { UseLocationResult } from './hooks/useLocation';
 export { useForegroundLocation } from './hooks/useForegroundLocation';
