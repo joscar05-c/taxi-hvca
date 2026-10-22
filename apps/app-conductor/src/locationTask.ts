@@ -8,7 +8,7 @@ export const BACKGROUND_LOCATION_TASK = 'BACKGROUND_LOCATION_TASK';
 /**
  * Tarea de expo-task-manager que corre en segundo plano. Recibe los puntos
  * reportados por `startLocationUpdatesAsync` y persiste la última ubicación
- * del conductor en `profiles.ubicacion_actual` (columna PostGIS geometry).
+ * del conductor en `perfiles.ubicacion_actual` (columna PostGIS geometry).
  */
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) {

@@ -1,13 +1,15 @@
 import type { Profile } from '../domain/types';
 import { supabase } from './supabaseClient';
 
+const TABLA_PERFILES = 'perfiles';
+
 export const authRepository = {
   async obtenerPerfilActual(): Promise<Profile | null> {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
     const { data, error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .select('*')
       .eq('id', user.id)
       .maybeSingle();
@@ -18,7 +20,7 @@ export const authRepository = {
 
   async obtenerPerfil(usuarioId: string): Promise<Profile | null> {
     const { data, error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .select('*')
       .eq('id', usuarioId)
       .maybeSingle();
@@ -32,7 +34,7 @@ export const authRepository = {
     if (!user) throw new Error('Sesión no iniciada.');
 
     const { data, error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .update({ vehiculo })
       .eq('id', user.id)
       .select('*')
@@ -47,7 +49,7 @@ export const authRepository = {
     if (!user) throw new Error('Sesión no iniciada.');
 
     const { data, error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .update({ estado })
       .eq('id', user.id)
       .select('*')
@@ -62,7 +64,7 @@ export const authRepository = {
     if (!user) throw new Error('Sesión no iniciada.');
 
     const { data, error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .update({ esta_conectado: estaConectado })
       .eq('id', user.id)
       .select('*')
@@ -77,7 +79,7 @@ export const authRepository = {
     if (!user) throw new Error('Sesión no iniciada.');
 
     const { error } = await supabase
-      .from('profiles')
+      .from(TABLA_PERFILES)
       .update({
         ubicacion_actual: `SRID=4326;POINT(${longitud} ${latitud})`,
       })
