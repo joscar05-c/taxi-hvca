@@ -8,7 +8,7 @@ import { useAuthInit, useAuthStore } from '@hvca/shared';
 
 export default function RootLayout() {
   useAuthInit();
-  const { isInitialized, session } = useAuthStore();
+  const { isInitialized } = useAuthStore();
 
   // Mientras no verificamos la sesión persistida, mostramos un splash.
   if (!isInitialized) {
