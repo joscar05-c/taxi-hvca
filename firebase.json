@@ -8,7 +8,15 @@
       "phone": true,
       "googleSignIn": {
         "oAuthBrandDisplayName": "Taxi HVCA Admin",
-        "supportEmail": "locomancocapac@gmail.com"
+        "supportEmail": "locomancocapac@gmail.com",
+        "authorizedRedirectUris": [
+          "https://taxi-hvca.vercel.app",
+          "https://taxi-hvca.vercel.app/__/auth/handler",
+          "https://taxi-hvca-jose-carlos-projects-f033200f.vercel.app",
+          "https://taxi-hvca-jose-carlos-projects-f033200f.vercel.app/__/auth/handler",
+          "http://localhost:3000",
+          "http://localhost:3000/__/auth/handler"
+        ]
       }
     }
   }
