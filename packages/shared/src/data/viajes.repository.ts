@@ -102,6 +102,21 @@ export const viajesRepository = {
   },
 
   /**
+   * Cancela una solicitud de viaje pasándola a estado `cancelada`.
+   */
+  async cancelarSolicitud(solicitudId: string): Promise<SolicitudViaje> {
+    const { data, error } = await supabase
+      .from('solicitudes_viaje')
+      .update({ estado: 'cancelada' })
+      .eq('id', solicitudId)
+      .select('*')
+      .single();
+
+    if (error) throw error;
+    return data;
+  },
+
+  /**
    * Escucha en tiempo real la aparición de solicitudes en estado `buscando`.
    * Devuelve una función para cancelar la suscripción.
    */
