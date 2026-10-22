@@ -12,8 +12,8 @@ import {
   Button,
   Input,
   PantallaCentrada,
+  authRepository,
   colores,
-  supabase,
   useAuthStore,
 } from '@hvca/shared';
 
@@ -41,22 +41,15 @@ export default function PantallaRegistro() {
 
     setCargando(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      await authRepository.registrarConEmail({
         email: email.trim().toLowerCase(),
         password,
-        options: {
-          data: {
-            nombre: nombre.trim(),
-            telefono: telefono.trim(),
-            rol: 'pasajero',
-          },
-        },
+        nombre: nombre.trim(),
+        telefono: telefono.trim(),
+        rol: 'pasajero',
       });
-      if (error) throw error;
-
-      // Si la confirmación por email está habilitada, la sesión no viene en la
-      // respuesta; informamos al usuario.
-      setConfirmacionEnviada(true);
+      // El listener de Firebase Auth onAuthStateChanged detecta la sesión y redirige.
+      setConfirmacionEnviada(false);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo crear la cuenta.');

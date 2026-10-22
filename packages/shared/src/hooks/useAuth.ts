@@ -1,11 +1,11 @@
-import type { Session } from '@supabase/supabase-js';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
-import { supabase } from '../data/supabaseClient';
+import { auth } from '../data/firebaseClient';
 import type { Profile } from '../domain/types';
-import { useAuthStore } from '../store/useAuthStore';
+import { useAuthStore, type SessionCompat } from '../store/useAuthStore';
 
 export interface UseAuthResult {
-  sesion: Session | null;
+  sesion: SessionCompat | null;
   perfil: Profile | null;
   isInitialized: boolean;
   iniciarSesion: (email: string, password: string) => Promise<{
@@ -16,9 +16,9 @@ export interface UseAuthResult {
 }
 
 /**
- * Hook de solo lectura: no mantiene estado local.
+ * Hook de autenticación: sin estado local.
  * Todo se lee de `useAuthStore` (única fuente de la verdad); las acciones
- * disparan Supabase y el listener de `onAuthStateChange` actualiza el store.
+ * disparan Firebase Auth y el listener de `onAuthStateChanged` actualiza el store.
  */
 export function useAuth(): UseAuthResult {
   const sesion = useAuthStore((state) => state.session);
@@ -26,16 +26,19 @@ export function useAuth(): UseAuthResult {
   const isInitialized = useAuthStore((state) => state.isInitialized);
 
   async function iniciarSesion(email: string, password: string) {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) return { ok: false, error: error.message };
-    return { ok: true, error: data.session ? undefined : 'Revisa tu correo para confirmar.' };
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : 'No se pudo iniciar sesión.',
+      };
+    }
   }
 
   async function cerrarSesion() {
-    await supabase.auth.signOut();
+    await signOut(auth);
   }
 
   return { sesion, perfil, isInitialized, iniciarSesion, cerrarSesion };

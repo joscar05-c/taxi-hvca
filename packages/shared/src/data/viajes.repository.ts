@@ -1,17 +1,28 @@
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  query,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
+
 import type {
   Coordenadas,
   OfertaConductor,
   SolicitudEnProgreso,
   SolicitudViaje,
 } from '../domain/types';
-import { supabase } from './supabaseClient';
+import { db } from './firebaseClient';
 
-/** Canal Realtime compartido para las solicitudes nuevas. */
-const CANAL_NUEVAS_SOLICITUDES = 'nuevas-solicitudes';
+const COLECCION_SOLICITUDES = 'solicitudes_viaje';
+const COLECCION_OFERTAS = 'ofertas_conductores';
 
 /**
- * Capa de datos del flujo de viajes en tiempo real: solicitudes del pasajero
- * y ofertas de los conductores, más suscripciones vía WebSockets de Supabase.
+ * Capa de datos del flujo de viajes en tiempo real utilizando Cloud Firestore:
+ * solicitudes del pasajero, ofertas de los conductores y suscripciones en tiempo real con onSnapshot.
  */
 export const viajesRepository = {
   /**
@@ -24,21 +35,22 @@ export const viajesRepository = {
     destino: Coordenadas,
     precioInicial: number,
   ): Promise<SolicitudViaje> {
-    const { data, error } = await supabase
-      .from('solicitudes_viaje')
-      .insert({
-        pasajero_id: pasajeroId,
-        origen_lat: origen.latitude,
-        origen_lng: origen.longitude,
-        destino_lat: destino.latitude,
-        destino_lng: destino.longitude,
-        precio_inicial: precioInicial,
-      })
-      .select('*')
-      .single();
+    const ahora = new Date().toISOString();
+    const data: Omit<SolicitudViaje, 'id'> = {
+      pasajero_id: pasajeroId,
+      origen_lat: origen.latitude,
+      origen_lng: origen.longitude,
+      destino_lat: destino.latitude,
+      destino_lng: destino.longitude,
+      precio_inicial: precioInicial,
+      estado: 'buscando',
+      conductor_id: null,
+      precio_final: null,
+      created_at: ahora,
+    };
 
-    if (error) throw error;
-    return data;
+    const docRef = await addDoc(collection(db, COLECCION_SOLICITUDES), data);
+    return { id: docRef.id, ...data };
   },
 
   /** Registra la oferta de un conductor para una solicitud. */
@@ -47,18 +59,16 @@ export const viajesRepository = {
     conductorId: string,
     precio: number,
   ): Promise<OfertaConductor> {
-    const { data, error } = await supabase
-      .from('ofertas_conductores')
-      .insert({
-        solicitud_id: solicitudId,
-        conductor_id: conductorId,
-        precio,
-      })
-      .select('*')
-      .single();
+    const ahora = new Date().toISOString();
+    const data: Omit<OfertaConductor, 'id'> = {
+      solicitud_id: solicitudId,
+      conductor_id: conductorId,
+      precio,
+      created_at: ahora,
+    };
 
-    if (error) throw error;
-    return data;
+    const docRef = await addDoc(collection(db, COLECCION_OFERTAS), data);
+    return { id: docRef.id, ...data };
   },
 
   /** El pasajero acepta la oferta: la solicitud pasa a estado `aceptado`. */
@@ -67,19 +77,16 @@ export const viajesRepository = {
     conductorId: string,
     precioFinal: number,
   ): Promise<SolicitudViaje> {
-    const { data, error } = await supabase
-      .from('solicitudes_viaje')
-      .update({
-        estado: 'aceptado',
-        conductor_id: conductorId,
-        precio_final: precioFinal,
-      })
-      .eq('id', solicitudId)
-      .select('*')
-      .single();
+    const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
+    await updateDoc(docRef, {
+      estado: 'aceptado',
+      conductor_id: conductorId,
+      precio_final: precioFinal,
+    });
 
-    if (error) throw error;
-    return data;
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('No se encontró la solicitud.');
+    return { id: snap.id, ...snap.data() } as SolicitudViaje;
   },
 
   /**
@@ -90,30 +97,24 @@ export const viajesRepository = {
     solicitudId: string,
     nuevoEstado: SolicitudEnProgreso,
   ): Promise<SolicitudViaje> {
-    const { data, error } = await supabase
-      .from('solicitudes_viaje')
-      .update({ estado: nuevoEstado })
-      .eq('id', solicitudId)
-      .select('*')
-      .single();
+    const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
+    await updateDoc(docRef, { estado: nuevoEstado });
 
-    if (error) throw error;
-    return data;
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('No se encontró la solicitud.');
+    return { id: snap.id, ...snap.data() } as SolicitudViaje;
   },
 
   /**
    * Cancela una solicitud de viaje pasándola a estado `cancelada`.
    */
   async cancelarSolicitud(solicitudId: string): Promise<SolicitudViaje> {
-    const { data, error } = await supabase
-      .from('solicitudes_viaje')
-      .update({ estado: 'cancelada' })
-      .eq('id', solicitudId)
-      .select('*')
-      .single();
+    const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
+    await updateDoc(docRef, { estado: 'cancelada' });
 
-    if (error) throw error;
-    return data;
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('No se encontró la solicitud.');
+    return { id: snap.id, ...snap.data() } as SolicitudViaje;
   },
 
   /**
@@ -123,23 +124,23 @@ export const viajesRepository = {
   suscribirNuevasSolicitudes(
     callback: (solicitud: SolicitudViaje) => void,
   ): () => void {
-    const canal = supabase
-      .channel(CANAL_NUEVAS_SOLICITUDES)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'solicitudes_viaje',
-          filter: 'estado=eq.buscando',
-        },
-        (payload) => callback(payload.new as SolicitudViaje),
-      )
-      .subscribe();
+    const q = query(
+      collection(db, COLECCION_SOLICITUDES),
+      where('estado', '==', 'buscando'),
+    );
 
-    return () => {
-      void supabase.removeChannel(canal);
-    };
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          callback({
+            id: change.doc.id,
+            ...change.doc.data(),
+          } as SolicitudViaje);
+        }
+      });
+    });
+
+    return unsubscribe;
   },
 
   /**
@@ -150,49 +151,43 @@ export const viajesRepository = {
     solicitudId: string,
     callback: (oferta: OfertaConductor) => void,
   ): () => void {
-    const canal = supabase
-      .channel(`ofertas-${solicitudId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'ofertas_conductores',
-          filter: `solicitud_id=eq.${solicitudId}`,
-        },
-        (payload) => callback(payload.new as OfertaConductor),
-      )
-      .subscribe();
+    const q = query(
+      collection(db, COLECCION_OFERTAS),
+      where('solicitud_id', '==', solicitudId),
+    );
 
-    return () => {
-      void supabase.removeChannel(canal);
-    };
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          callback({
+            id: change.doc.id,
+            ...change.doc.data(),
+          } as OfertaConductor);
+        }
+      });
+    });
+
+    return unsubscribe;
   },
 
   /**
-   * Escucha en tiempo real los cambios de estado de una solicitud (UPDATE en
-   * `solicitudes_viaje`). Devuelve una función para cancelar la suscripción.
+   * Escucha en tiempo real los cambios de estado de una solicitud.
+   * Devuelve una función para cancelar la suscripción.
    */
   suscribirCambiosSolicitud(
     solicitudId: string,
     callback: (solicitud: SolicitudViaje) => void,
   ): () => void {
-    const canal = supabase
-      .channel(`solicitud-${solicitudId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'solicitudes_viaje',
-          filter: `id=eq.${solicitudId}`,
-        },
-        (payload) => callback(payload.new as SolicitudViaje),
-      )
-      .subscribe();
+    const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
+    const unsubscribe = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        callback({
+          id: snap.id,
+          ...snap.data(),
+        } as SolicitudViaje);
+      }
+    });
 
-    return () => {
-      void supabase.removeChannel(canal);
-    };
+    return unsubscribe;
   },
 };

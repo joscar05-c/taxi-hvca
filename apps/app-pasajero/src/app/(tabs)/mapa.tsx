@@ -15,7 +15,6 @@ import {
   Input,
   authRepository,
   colores,
-  supabase,
   useAuth,
   useForegroundLocation,
   viajesRepository,
@@ -47,7 +46,7 @@ function textoEstadoViaje(estado: SolicitudEstado): string {
 
 export default function PantallaMapa() {
   const insets = useSafeAreaInsets();
-  const { sesion } = useAuth();
+  const { sesion, cerrarSesion } = useAuth();
   const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
     useForegroundLocation();
   const [centroMapa, setCentroMapa] = useState<Coordenadas | null>(null);
@@ -238,7 +237,7 @@ export default function PantallaMapa() {
 
       {/* Cerrar sesión (acceso rápido para pruebas) */}
       <Pressable
-        onPress={() => void supabase.auth.signOut()}
+        onPress={() => void cerrarSesion()}
         style={[
           styles.logout,
           { top: Math.max(insets.top, 12), left: Math.max(insets.left, 12) },

@@ -2,10 +2,10 @@
 export * from './domain/types';
 export * from './domain/fare';
 
-// Capa de datos (repositorios y cliente Supabase)
-export { supabase, getSupabaseClient } from './data/supabaseClient';
-export { getEnvVars } from './data/supabase';
-export type { EnvVars } from './data/supabase';
+// Capa de datos (repositorios y cliente Firebase)
+export { app, auth, db, firebaseConfig } from './data/firebaseClient';
+export { getFirebaseEnvVars } from './data/firebase';
+export type { FirebaseEnvVars } from './data/firebase';
 export { authRepository } from './data/auth.repository';
 export { viajesRepository } from './data/viajes.repository';
 
@@ -32,4 +32,4 @@ export type { UseBackgroundLocationResult } from './hooks/useBackgroundLocation'
 
 // Estado global
 export { useAuthStore } from './store/useAuthStore';
-export type { AuthState } from './store/useAuthStore';
+export type { AuthState, SessionCompat } from './store/useAuthStore';

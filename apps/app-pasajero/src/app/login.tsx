@@ -12,8 +12,8 @@ import {
   Button,
   Input,
   PantallaCentrada,
+  authRepository,
   colores,
-  supabase,
   useAuthStore,
 } from '@hvca/shared';
 
@@ -38,12 +38,11 @@ export default function PantallaLogin() {
 
     setCargando(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+      await authRepository.iniciarSesionConEmail(
+        email.trim().toLowerCase(),
         password,
-      });
-      if (error) throw error;
-      // El listener de onAuthStateChange actualiza el store y redirige.
+      );
+      // El listener de onAuthStateChanged actualiza el store y redirige.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo iniciar sesión.');
     } finally {

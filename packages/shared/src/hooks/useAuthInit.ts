@@ -1,16 +1,16 @@
 import { useEffect } from 'react';
+import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
 
 import { authRepository } from '../data/auth.repository';
-import { supabase } from '../data/supabaseClient';
-import type { Session } from '@supabase/supabase-js';
+import { auth } from '../data/firebaseClient';
 import { useAuthStore } from '../store/useAuthStore';
 
 /**
- * Inicializa la autenticación al montar la app y la mantiene sincronizada.
+ * Inicializa la autenticación al montar la app y la mantiene sincronizada con Firebase Auth.
  * Sin estado local: todo se escribe directamente en `useAuthStore` (SSOT).
- * - Recupera la sesión persistida con `getSession()` y el perfil asociado.
- * - Se suscribe a `onAuthStateChange()` para reflejar cada cambio en el store.
- * Colocar una sola vez en el root de la app (ej. componente superior).
+ * - Se suscribe a `onAuthStateChanged()` para reflejar cada cambio en el store.
+ * - Recupera el perfil del usuario desde Firestore (`perfiles/{uid}`).
+ * Colocar una sola vez en el root de la app (ej. `_layout.tsx`).
  */
 export function useAuthInit(): void {
   const setSession = useAuthStore((state) => state.setSession);
@@ -19,52 +19,33 @@ export function useAuthInit(): void {
   useEffect(() => {
     let activo = true;
 
-    async function sincronizarSesion(sesion: Session | null) {
+    async function sincronizarUsuario(firebaseUser: FirebaseUser | null) {
       if (!activo) return;
-      setSession(sesion);
+      setSession(firebaseUser);
 
-      if (!sesion) {
+      if (!firebaseUser) {
         setPerfil(null);
         return;
       }
 
       try {
-        const perfil = await authRepository.obtenerPerfilActual();
+        const perfil = await authRepository.obtenerPerfil(firebaseUser.uid);
         if (activo) setPerfil(perfil);
       } catch (e) {
         if (activo) {
-          console.warn('No se pudo cargar el perfil:', e);
+          console.warn('No se pudo cargar el perfil de Firestore:', e);
           setPerfil(null);
         }
       }
     }
 
-    supabase.auth
-      .getSession()
-      .then(({ data, error }) => {
-        if (error) {
-          console.warn('Error al recuperar la sesión:', error.message);
-          void sincronizarSesion(null);
-          return;
-        }
-        void sincronizarSesion(data.session);
-      })
-      .catch((e: unknown) => {
-        if (activo) {
-          console.warn('No se pudo recuperar la sesión:', e);
-          void sincronizarSesion(null);
-        }
-      });
-
-    const { data: suscripcion } = supabase.auth.onAuthStateChange(
-      async (_evento, sesion) => {
-        await sincronizarSesion(sesion);
-      },
-    );
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      void sincronizarUsuario(firebaseUser);
+    });
 
     return () => {
       activo = false;
-      suscripcion.subscription.unsubscribe();
+      unsubscribe();
     };
   }, [setSession, setPerfil]);
 }

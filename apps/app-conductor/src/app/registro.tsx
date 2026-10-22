@@ -12,8 +12,8 @@ import {
   Button,
   Input,
   PantallaCentrada,
+  authRepository,
   colores,
-  supabase,
   useAuthStore,
 } from '@hvca/shared';
 
@@ -41,20 +41,15 @@ export default function PantallaRegistro() {
 
     setCargando(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      await authRepository.registrarConEmail({
         email: email.trim().toLowerCase(),
         password,
-        options: {
-          data: {
-            nombre: nombre.trim(),
-            telefono: telefono.trim(),
-            rol: 'conductor',
-          },
-        },
+        nombre: nombre.trim(),
+        telefono: telefono.trim(),
+        rol: 'conductor',
       });
-      if (error) throw error;
 
-      setConfirmacionEnviada(true);
+      setConfirmacionEnviada(false);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo crear la cuenta.');

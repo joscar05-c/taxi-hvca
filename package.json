@@ -2,7 +2,7 @@
   "name": "taxi-hvca",
   "version": "1.0.0",
   "private": true,
-  "description": "Plataforma de movilidad tipo InDrive — monorepo Expo + Supabase",
+  "description": "Plataforma de movilidad tipo InDrive — monorepo Expo + Firebase",
   "workspaces": [
     "apps/*",
     "packages/*"
