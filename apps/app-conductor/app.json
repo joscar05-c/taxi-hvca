@@ -13,11 +13,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.joscar03.dev.appconductor",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.joscar03.dev.appconductor",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",

@@ -12,11 +12,15 @@
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.joscar03.dev.apppasajero",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrarte el mapa y fijar el origen de tu viaje."
       }
     },
     "android": {
+      "package": "com.joscar03.dev.apppasajero",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"

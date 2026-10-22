@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "44228988408",
+    "project_id": "taxi-hvca-app",
+    "storage_bucket": "taxi-hvca-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:44228988408:android:b78171271f0536f9f5da0d",
+        "android_client_info": {
+          "package_name": "com.joscar03.dev.appconductor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFpfwlzAl48viuBWzhc4pm82Hy_3srShc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:44228988408:android:73c5099fd5f11ae1f5da0d",
+        "android_client_info": {
+          "package_name": "com.joscar03.dev.apppasajero"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFpfwlzAl48viuBWzhc4pm82Hy_3srShc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
