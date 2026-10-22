@@ -37,7 +37,7 @@ export function useBackgroundLocation(
     };
   }, [taskName]);
 
-  async function startTracking(): Promise<boolean> {
+  const startTracking = useCallback(async (): Promise<boolean> => {
     setError(null);
     setLoading(true);
     try {
@@ -72,9 +72,9 @@ export function useBackgroundLocation(
     } finally {
       setLoading(false);
     }
-  }
+  }, [taskName]);
 
-  async function stopTracking(): Promise<void> {
+  const stopTracking = useCallback(async (): Promise<void> => {
     setError(null);
     setLoading(true);
     try {
@@ -88,7 +88,7 @@ export function useBackgroundLocation(
     } finally {
       setLoading(false);
     }
-  }
+  }, [taskName]);
 
   return { isTracking, loading, error, startTracking, stopTracking };
 }
