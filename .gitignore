@@ -2,11 +2,13 @@
 node_modules/
 *.tsbuildinfo
 
-# Expo / React Native
+# Expo / React Native / Next.js
 .expo/
 .expo-shared/
 dist/
 web-build/
+.next/
+out/
 
 # Entornos
 .env
