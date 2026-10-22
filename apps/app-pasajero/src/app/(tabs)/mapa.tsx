@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import MapView from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
@@ -45,6 +46,7 @@ function textoEstadoViaje(estado: SolicitudEstado): string {
 }
 
 export default function PantallaMapa() {
+  const insets = useSafeAreaInsets();
   const { sesion } = useAuth();
   const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
     useForegroundLocation();
@@ -159,7 +161,24 @@ export default function PantallaMapa() {
     }
   }
 
-  function cancelarSolicitud() {
+  async function cancelarSolicitud() {
+    const solicitudActiva = solicitud ?? viajeAceptado;
+    if (
+      solicitudActiva &&
+      solicitudActiva.estado !== 'completado' &&
+      solicitudActiva.estado !== 'cancelada'
+    ) {
+      setOperando(true);
+      try {
+        await viajesRepository.cancelarSolicitud(solicitudActiva.id);
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message : 'No se pudo cancelar la solicitud.',
+        );
+      } finally {
+        setOperando(false);
+      }
+    }
     setSolicitud(null);
     setOfertas([]);
     setViajeAceptado(null);
@@ -218,13 +237,24 @@ export default function PantallaMapa() {
       ) : null}
 
       {/* Cerrar sesión (acceso rápido para pruebas) */}
-      <Pressable onPress={() => void supabase.auth.signOut()} style={styles.logout}>
+      <Pressable
+        onPress={() => void supabase.auth.signOut()}
+        style={[
+          styles.logout,
+          { top: Math.max(insets.top, 12), left: Math.max(insets.left, 12) },
+        ]}
+      >
         <Text style={styles.logoutTexto}>Cerrar sesión</Text>
       </Pressable>
 
       {/* Barra inferior: preparación, búsqueda u ofertas */}
       {!enViaje ? (
-        <View style={styles.barraInferior}>
+        <View
+          style={[
+            styles.barraInferior,
+            { paddingBottom: Math.max(insets.bottom, 16) },
+          ]}
+        >
           {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -315,7 +345,8 @@ export default function PantallaMapa() {
               <Button
                 label="Cancelar solicitud"
                 variante="secundario"
-                onPress={cancelarSolicitud}
+                onPress={() => void cancelarSolicitud()}
+                cargando={operando}
                 estilo={styles.boton}
               />
             </>
@@ -323,7 +354,12 @@ export default function PantallaMapa() {
         </View>
       ) : (
         /* Tarjeta flotante: el viaje ya fue aceptado (match realizado) */
-        <View style={styles.tarjetaViaje}>
+        <View
+          style={[
+            styles.tarjetaViaje,
+            { paddingBottom: Math.max(insets.bottom, 16) },
+          ]}
+        >
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Text style={styles.viajeTitulo}>Viaje en curso</Text>
           <Text style={styles.viajeEstado}>
@@ -359,7 +395,7 @@ export default function PantallaMapa() {
           viajeAceptado.estado === 'cancelada' ? (
             <Button
               label="Nueva solicitud"
-              onPress={cancelarSolicitud}
+              onPress={() => void cancelarSolicitud()}
               estilo={styles.boton}
             />
           ) : null}
@@ -422,7 +458,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: colores.fondo,
+    backgroundColor: colores.accent,
   },
   pinTriangulo: {
     width: 0,
