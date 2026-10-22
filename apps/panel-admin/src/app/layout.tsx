@@ -3,8 +3,16 @@ import '../styles/globals.css';
 import { AuthProvider } from '../lib/authContext';
 
 export const metadata: Metadata = {
-  title: 'Taxi HVCA — Panel de Administración',
-  description: 'Control y monitoreo en tiempo real de viajes, conductores y pasajeros.',
+  title: 'Taxi HVCA — Tu viaje seguro y a precio justo en Huancavelica',
+  description:
+    'Pide taxi o afíliate como conductor en Huancavelica. Negocia tu tarifa libremente, viaja con GPS en tiempo real y choferes 100% verificados.',
+  keywords: [
+    'taxi huancavelica',
+    'taxi hvca',
+    'app taxi huancavelica',
+    'conductores huancavelica',
+    'viajes huancavelica',
+  ],
 };
 
 export default function RootLayout({
