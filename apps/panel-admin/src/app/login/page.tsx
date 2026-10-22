@@ -8,13 +8,21 @@ import { useAuth } from '../../lib/authContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading, signInWithEmail, signInWithGoogle } = useAuth();
+  const {
+    user,
+    loading,
+    error: authContextError,
+    signInWithEmail,
+    signInWithGoogle,
+  } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const mensajeError = error || authContextError;
 
   useEffect(() => {
     if (!loading && user) {
@@ -84,10 +92,10 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="glass-panel rounded-3xl p-8 shadow-2xl">
-          {error && (
+          {mensajeError && (
             <div className="mb-6 flex items-start gap-3 rounded-xl bg-rose-500/10 border border-rose-500/30 p-3.5 text-rose-400 text-xs">
               <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>{error}</span>
+              <span>{mensajeError}</span>
             </div>
           )}
 
