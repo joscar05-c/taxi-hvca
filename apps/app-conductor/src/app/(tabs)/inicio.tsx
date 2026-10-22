@@ -16,6 +16,7 @@ import {
 } from '@hvca/shared';
 
 import { BACKGROUND_LOCATION_TASK } from '../../locationTask';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const DISTANCIA_MAX_KM = 3;
 
@@ -23,6 +24,23 @@ type SolicitudCercana = {
   solicitud: SolicitudViaje;
   distanciaKm: number;
 };
+
+function etiquetaEstadoViaje(estado: SolicitudViaje['estado']): string {
+  switch (estado) {
+    case 'aceptado':
+      return 'En camino al pasajero';
+    case 'en_camino_origen':
+      return 'Esperando al pasajero en el origen';
+    case 'en_curso':
+      return 'Viaje en curso hacia el destino';
+    case 'completado':
+      return 'Viaje finalizado';
+    case 'cancelada':
+      return 'Viaje cancelado';
+    default:
+      return estado;
+  }
+}
 
 /**
  * Parsea un punto PostGIS (EWKT) como "SRID=4326;POINT(lng lat)" y devuelve
@@ -40,6 +58,7 @@ function parsearPuntoPostgis(texto: string | null): Coordenadas | null {
 }
 
 export default function PantallaInicio() {
+  const insets = useSafeAreaInsets();
   const { perfil, sesion, cerrarSesion } = useAuth();
   const { isTracking, loading, error: errorTracking, startTracking, stopTracking } =
     useBackgroundLocation(BACKGROUND_LOCATION_TASK);
@@ -241,6 +260,25 @@ export default function PantallaInicio() {
     }
   }
 
+  async function iniciarViaje() {
+    if (!viajeActivo) return;
+    setOperando(true);
+    setError(null);
+    setMensaje(null);
+    try {
+      const actualizada = await viajesRepository.actualizarEstadoViaje(
+        viajeActivo.id,
+        'en_curso',
+      );
+      setViajeActivo(actualizada);
+      setMensaje('Viaje iniciado. En curso hacia el destino.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo iniciar el viaje.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
   async function finalizarViaje() {
     if (!viajeActivo) return;
     setOperando(true);
@@ -282,7 +320,10 @@ export default function PantallaInicio() {
   return (
     <ScrollView
       style={styles.contenedor}
-      contentContainerStyle={styles.contenido}
+      contentContainerStyle={[
+        styles.contenido,
+        { paddingTop: Math.max(insets.top, 24) },
+      ]}
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.cabecera}>
@@ -327,6 +368,9 @@ export default function PantallaInicio() {
         <View style={styles.radar}>
           <View style={styles.tarjetaViajeActivo}>
             <Text style={styles.viajeTitulo}>Viaje Activo</Text>
+            <Text style={styles.viajeEstadoTexto}>
+              {etiquetaEstadoViaje(viajeActivo.estado)}
+            </Text>
             <Text style={styles.viajeOrigen}>
               Origen: {viajeActivo.origen_lat.toFixed(5)},{' '}
               {viajeActivo.origen_lng.toFixed(5)}
@@ -342,19 +386,32 @@ export default function PantallaInicio() {
               ).toFixed(2)}
             </Text>
             <View style={styles.filaBotones}>
-              <Button
-                label="Llegué al origen"
-                onPress={() => void llegueAlOrigen()}
-                cargando={operando}
-                estilo={styles.botonViaje}
-              />
-              <Button
-                label="Finalizar Viaje"
-                variante="peligro"
-                onPress={() => void finalizarViaje()}
-                cargando={operando}
-                estilo={styles.botonViaje}
-              />
+              {viajeActivo.estado === 'aceptado' ? (
+                <Button
+                  label="Llegué al origen"
+                  onPress={() => void llegueAlOrigen()}
+                  cargando={operando}
+                  estilo={styles.botonViaje}
+                />
+              ) : null}
+              {viajeActivo.estado === 'en_camino_origen' ? (
+                <Button
+                  label="Iniciar viaje"
+                  variante="accent"
+                  onPress={() => void iniciarViaje()}
+                  cargando={operando}
+                  estilo={styles.botonViaje}
+                />
+              ) : null}
+              {viajeActivo.estado === 'en_curso' ? (
+                <Button
+                  label="Finalizar Viaje"
+                  variante="peligro"
+                  onPress={() => void finalizarViaje()}
+                  cargando={operando}
+                  estilo={styles.botonViaje}
+                />
+              ) : null}
             </View>
           </View>
         </View>
@@ -615,6 +672,12 @@ const styles = StyleSheet.create({
   viajeTitulo: {
     fontSize: 18,
     fontWeight: '700',
+    color: colores.primario,
+    marginBottom: 4,
+  },
+  viajeEstadoTexto: {
+    fontSize: 14,
+    fontWeight: '600',
     color: colores.primario,
     marginBottom: 12,
   },
