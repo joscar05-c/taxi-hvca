@@ -8,7 +8,7 @@ export interface AuthState {
   user: User | null;
   /** Sesión actual de Supabase (o null si no hay sesión). */
   session: Session | null;
-  /** Perfil del usuario en la tabla `profiles` (o null si no hay sesión). */
+  /** Perfil del usuario en la tabla `perfiles` (o null si no hay sesión). */
   perfil: Profile | null;
   /** true una vez que verificamos la sesión al abrir la app. */
   isInitialized: boolean;

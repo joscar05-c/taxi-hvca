@@ -27,12 +27,13 @@ export type Profile = {
   updated_at: string;
 };
 
+/** @deprecated Usar `SolicitudEstado`. */
 export type RideStatus =
   | 'solicitada'
   | 'aceptada'
-  | 'en_ruta_al_pasajero'
-  | 'en_viaje'
-  | 'finalizada'
+  | 'en_camino_origen'
+  | 'en_curso'
+  | 'completado'
   | 'cancelada';
 
 /** Estados del flujo en tiempo real (tabla `solicitudes_viaje`). */
@@ -82,6 +83,7 @@ export type OfertaConductor = {
   created_at: string;
 };
 
+/** @deprecated Usar `SolicitudViaje`. */
 export type RideRequest = {
   id: string;
   pasajero_id: string;
@@ -105,7 +107,7 @@ export type RideRequest = {
 export type Database = {
   public: {
     Tables: {
-      profiles: {
+      perfiles: {
         Row: Profile;
         Insert: Omit<
           Profile,
@@ -122,15 +124,6 @@ export type Database = {
           vehiculo?: string | null;
         };
         Update: Partial<Profile>;
-        Relationships: [];
-      };
-      ride_requests: {
-        Row: RideRequest;
-        Insert: Omit<
-          RideRequest,
-          'id' | 'estado' | 'conductor_id' | 'created_at'
-        >;
-        Update: Partial<Pick<RideRequest, 'estado' | 'conductor_id'>>;
         Relationships: [];
       };
       solicitudes_viaje: {
