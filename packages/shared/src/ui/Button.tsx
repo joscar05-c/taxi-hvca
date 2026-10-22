@@ -11,7 +11,7 @@ import { colores } from './theme';
 export interface ButtonProps {
   label: string;
   onPress: () => void;
-  variante?: 'primario' | 'secundario' | 'peligro';
+  variante?: 'primario' | 'secundario' | 'peligro' | 'accent';
   deshabilitado?: boolean;
   cargando?: boolean;
   estilo?: ViewStyle;
@@ -26,6 +26,7 @@ export function Button({
   estilo,
 }: ButtonProps) {
   const inactivo = deshabilitado || cargando;
+  const textoBlanco = variante === 'primario' || variante === 'peligro';
 
   return (
     <Pressable
@@ -41,9 +42,9 @@ export function Button({
       accessibilityRole="button"
     >
       {cargando ? (
-        <ActivityIndicator color={colores.fondo} />
+        <ActivityIndicator color={textoBlanco ? colores.fondo : colores.texto} />
       ) : (
-        <Text style={styles[variante === 'primario' ? 'textoPrimario' : 'textoSecundario']}>
+        <Text style={styles[textoBlanco ? 'textoPrimario' : 'textoSecundario']}>
           {label}
         </Text>
       )}
@@ -63,6 +64,7 @@ const styles = StyleSheet.create({
   primario: { backgroundColor: colores.primario },
   secundario: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colores.borde },
   peligro: { backgroundColor: colores.peligro },
+  accent: { backgroundColor: colores.accent },
   presionado: { opacity: 0.85 },
   deshabilitado: { opacity: 0.5 },
   textoPrimario: { color: colores.fondo, fontSize: 16, fontWeight: '600' },
