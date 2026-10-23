@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   Button,
@@ -137,25 +137,93 @@ export default function PantallaInicio() {
     );
   }, [isTracking, manejarNuevaSolicitud, manejarSolicitudEliminada]);
 
-  // Por cada solicitud con oferta enviada, escuchamos si el pasajero la
-  // acepta. La suscripción se cancela al cambiar la lista o al desmontar, y
-  // especialmente cuando el viaje termina (se quita el id al finalizar).
+  // Por cada solicitud con oferta enviada, escuchamos si el pasajero la acepta o cancela.
   const idConductor = sesion?.user?.id;
   useEffect(() => {
     const limpiadores: Array<() => void> = [];
     ofertasEnviadas.forEach((solicitudId) => {
       limpiadores.push(
-        viajesRepository.suscribirCambiosSolicitud(solicitudId, (solicitud) => {
-          if (solicitud.estado === 'aceptado' && solicitud.conductor_id === idConductor) {
-            setViajeActivo(solicitud);
-          }
-        }),
+        viajesRepository.suscribirCambiosSolicitud(
+          solicitudId,
+          (solicitud) => {
+            if (solicitud.estado === 'aceptado') {
+              if (solicitud.conductor_id === idConductor) {
+                setViajeActivo(solicitud);
+              } else {
+                // Pasajero aceptó a otro conductor: remover oferta de pendientes
+                setOfertasEnviadas((prev) => {
+                  const nuevo = new Set(prev);
+                  nuevo.delete(solicitudId);
+                  return nuevo;
+                });
+                setSolicitudesCercanas((prev) =>
+                  prev.filter((s) => s.solicitud.id !== solicitudId),
+                );
+              }
+            } else if (solicitud.estado === 'cancelada') {
+              setOfertasEnviadas((prev) => {
+                const nuevo = new Set(prev);
+                nuevo.delete(solicitudId);
+                return nuevo;
+              });
+              setSolicitudesCercanas((prev) =>
+                prev.filter((s) => s.solicitud.id !== solicitudId),
+              );
+              setViajeActivo((actual) => {
+                if (actual?.id === solicitudId) {
+                  Alert.alert(
+                    'Viaje cancelado',
+                    'El pasajero ha cancelado la solicitud de viaje.',
+                  );
+                  return null;
+                }
+                return actual;
+              });
+            }
+          },
+          (error) => {
+            console.warn('[inicio] Error en suscripción solicitud:', error);
+          },
+        ),
       );
     });
     return () => {
       limpiadores.forEach((limpiar) => limpiar());
     };
   }, [ofertasEnviadas, idConductor]);
+
+  // Escuchar reactivamente cambios en el viaje activo (si el pasajero cancela mientras se viaja)
+  useEffect(() => {
+    if (!viajeActivo?.id) return;
+    const unsub = viajesRepository.suscribirCambiosSolicitud(
+      viajeActivo.id,
+      (solicitudActualizada) => {
+        if (solicitudActualizada.estado === 'cancelada') {
+          Alert.alert(
+            'Viaje cancelado',
+            'El pasajero ha cancelado el viaje. Regresando a la pantalla de solicitudes.',
+          );
+          setViajeActivo(null);
+          setOfertasEnviadas((prev) => {
+            const nuevo = new Set(prev);
+            nuevo.delete(solicitudActualizada.id);
+            return nuevo;
+          });
+          setSolicitudesCercanas((prev) =>
+            prev.filter((s) => s.solicitud.id !== solicitudActualizada.id),
+          );
+        } else if (solicitudActualizada.estado !== viajeActivo.estado) {
+          setViajeActivo((prev) =>
+            prev ? { ...prev, ...solicitudActualizada } : null,
+          );
+        }
+      },
+      (error) => {
+        console.warn('[inicio] Error en suscripción viajeActivo:', error);
+      },
+    );
+    return () => unsub();
+  }, [viajeActivo?.id, viajeActivo?.estado]);
 
   async function alternarConexion() {
     setMensaje(null);
