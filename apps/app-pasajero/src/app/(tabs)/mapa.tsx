@@ -101,9 +101,24 @@ export default function PantallaMapa() {
   useEffect(() => {
     if (!solicitud || enViaje) return;
     setOfertas([]);
-    return viajesRepository.suscribirOfertas(solicitud.id, (oferta) => {
-      setOfertas((prev) => [...prev, oferta]);
-    });
+    return viajesRepository.suscribirOfertas(
+      solicitud.id,
+      (oferta) => {
+        // Reemplazar oferta existente si el mismo conductor envía contraoferta o actualización
+        setOfertas((prev) => {
+          const sinEsta = prev.filter(
+            (o) => o.id !== oferta.id && o.conductor_id !== oferta.conductor_id,
+          );
+          return [...sinEsta, oferta];
+        });
+      },
+      (ofertaIdEliminada) => {
+        setOfertas((prev) => prev.filter((o) => o.id !== ofertaIdEliminada));
+      },
+      (error) => {
+        console.warn('[mapa] Error en suscripción de ofertas:', error);
+      },
+    );
   }, [solicitud, enViaje]);
 
   // Suscripción en tiempo real a los cambios de estado del viaje aceptado.
