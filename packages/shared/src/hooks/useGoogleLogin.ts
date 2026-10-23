@@ -56,6 +56,24 @@ export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLogin
   async function iniciarConGoogle() {
     setError(null);
     setCargando(true);
+
+    const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+    if (!webClientId) {
+      setCargando(false);
+      setError(
+        'Google Sign-In requiere configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID en el archivo .env.',
+      );
+      return;
+    }
+
+    if (!request) {
+      setCargando(false);
+      setError(
+        'La solicitud de autenticación de Google aún no está lista. Intenta nuevamente.',
+      );
+      return;
+    }
+
     try {
       const res = await promptAsync();
       if (res.type !== 'success') {
