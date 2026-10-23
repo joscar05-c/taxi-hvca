@@ -19,6 +19,7 @@ import {
 } from '@hvca/shared';
 
 import { BACKGROUND_LOCATION_TASK } from '../../locationTask';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const DISTANCIA_MAX_KM = 3;
@@ -62,6 +63,7 @@ function parsearPuntoPostgis(texto: string | null): Coordenadas | null {
 
 export default function PantallaInicio() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { perfil, sesion, cerrarSesion } = useAuth();
   const { isTracking, loading, error: errorTracking, startTracking, stopTracking } =
     useBackgroundLocation(BACKGROUND_LOCATION_TASK);
@@ -294,6 +296,21 @@ export default function PantallaInicio() {
         setSolicitudesCercanas([]);
         setMensaje('Te desconectaste. Ya no compartes tu ubicación.');
       } else {
+        if (!perfil?.telefono_verificado) {
+          Alert.alert(
+            'Verificación Obligatoria',
+            'Por seguridad, debes verificar tu número de celular con el código OTP antes de conectarte para recibir viajes.',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: 'Verificar en Perfil',
+                onPress: () => router.push('/(tabs)/perfil'),
+              },
+            ],
+          );
+          return;
+        }
+
         const iniciado = await startTracking();
         if (!iniciado) return;
 
@@ -324,6 +341,22 @@ export default function PantallaInicio() {
 
   async function aceptarSolicitud(solicitud: SolicitudViaje) {
     if (!sesion?.user) return;
+
+    if (!perfil?.telefono_verificado) {
+      Alert.alert(
+        'Verificación Obligatoria',
+        'Por seguridad, debes verificar tu número de celular antes de enviar ofertas.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Verificar en Perfil',
+            onPress: () => router.push('/(tabs)/perfil'),
+          },
+        ],
+      );
+      return;
+    }
+
     setError(null);
     setMensaje(null);
     setOperando(true);
@@ -350,6 +383,21 @@ export default function PantallaInicio() {
 
   async function confirmarContraoferta(solicitud: SolicitudViaje) {
     if (!sesion?.user || contraofertaId !== solicitud.id) return;
+
+    if (!perfil?.telefono_verificado) {
+      Alert.alert(
+        'Verificación Obligatoria',
+        'Por seguridad, debes verificar tu número de celular antes de enviar ofertas.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Verificar en Perfil',
+            onPress: () => router.push('/(tabs)/perfil'),
+          },
+        ],
+      );
+      return;
+    }
 
     const precio = parseFloat(precioContraoferta.trim().replace(',', '.'));
     if (!Number.isFinite(precio) || precio <= 0) {
@@ -491,6 +539,17 @@ export default function PantallaInicio() {
           variante={isTracking ? 'peligro' : 'primario'}
           estilo={styles.boton}
         />
+
+        {!perfil?.telefono_verificado && (
+          <Pressable
+            style={styles.avisoVerificacionConductor}
+            onPress={() => router.push('/(tabs)/perfil')}
+          >
+            <Text style={styles.textoAvisoVerificacionConductor}>
+              🔒 Teléfono no verificado. Toca aquí para validarlo en tu Perfil con un código OTP antes de conectarte.
+            </Text>
+          </Pressable>
+        )}
 
         {errorTracking ? (
           <Text style={styles.error}>{errorTracking}</Text>
@@ -994,5 +1053,20 @@ const styles = StyleSheet.create({
   textoChipActivo: {
     color: '#FFFFFF',
     fontWeight: '700',
+  },
+  avisoVerificacionConductor: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 12,
+  },
+  textoAvisoVerificacionConductor: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400E',
+    lineHeight: 16,
+    textAlign: 'center',
   },
 });

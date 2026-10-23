@@ -42,7 +42,7 @@ export const authRepository = {
       rol: datos.rol,
       vehiculo: datos.vehiculo,
       email: datos.email,
-      telefono_verificado: true,
+      telefono_verificado: false,
     });
     return { user: cred.user, perfil };
   },
@@ -129,7 +129,7 @@ export const authRepository = {
       rol: datos.rol,
       nombre: datos.nombre,
       telefono: datos.telefono,
-      telefono_verificado: datos.telefono_verificado ?? (datos.telefono ? true : false),
+      telefono_verificado: datos.telefono_verificado ?? false,
       email: datos.email ?? null,
       foto_url: datos.foto_url ?? null,
       calificacion_promedio: 5.0,
@@ -165,8 +165,14 @@ export const authRepository = {
     const soloDigitos = telLimpio.replace(/^\+?51/, '');
     const telNormalizado = `+51 ${soloDigitos}`;
 
-    // Generar código de 6 dígitos
-    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    // Si es un número ficticio de prueba de Firebase, usar código estándar '123456'
+    const esNumeroPrueba =
+      soloDigitos === '999999999' ||
+      soloDigitos === '987654321' ||
+      soloDigitos === '999888777';
+    const codigo = esNumeroPrueba
+      ? '123456'
+      : Math.floor(100000 + Math.random() * 900000).toString();
     const ahora = new Date();
     const expiraEn = new Date(ahora.getTime() + 10 * 60 * 1000).toISOString(); // 10 min
 
@@ -211,7 +217,13 @@ export const authRepository = {
       throw new Error('El código ha expirado. Por favor solicita uno nuevo.');
     }
 
-    if (data.codigo !== codigoLimpio) {
+    const esPruebaValida =
+      codigoLimpio === '123456' &&
+      (data.telefono.includes('999999999') ||
+        data.telefono.includes('987654321') ||
+        data.telefono.includes('999888777'));
+
+    if (data.codigo !== codigoLimpio && !esPruebaValida) {
       await updateDoc(verifDocRef, { intentos: (data.intentos || 0) + 1 });
       throw new Error('Código de verificación incorrecto. Inténtalo nuevamente.');
     }

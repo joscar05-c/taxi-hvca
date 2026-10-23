@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import MapView from 'react-native-maps';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -49,7 +51,8 @@ function textoEstadoViaje(estado: SolicitudEstado): string {
 
 export default function PantallaMapa() {
   const insets = useSafeAreaInsets();
-  const { sesion, cerrarSesion } = useAuth();
+  const router = useRouter();
+  const { perfil, sesion, cerrarSesion } = useAuth();
   const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
     useForegroundLocation();
   const [centroMapa, setCentroMapa] = useState<Coordenadas | null>(null);
@@ -148,6 +151,21 @@ export default function PantallaMapa() {
 
   async function pedirTaxi() {
     if (!originCoords || !sesion?.user) return;
+
+    if (!perfil?.telefono_verificado) {
+      Alert.alert(
+        'Verificación Obligatoria',
+        'Por seguridad de todos los usuarios, debes verificar tu número de celular con el código SMS antes de solicitar un taxi.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Verificar en Perfil',
+            onPress: () => router.push('/(tabs)/perfil'),
+          },
+        ],
+      );
+      return;
+    }
 
     const precio = parseFloat(tarifa.trim().replace(',', '.'));
     if (Number.isNaN(precio) || precio <= 0) {
@@ -298,11 +316,20 @@ export default function PantallaMapa() {
                 <Text style={styles.ayuda}>
                   Mueve el mapa hasta tu ubicación de recogida y fija el origen.
                 </Text>
-                <Button
-                  label="Fijar Origen"
-                  onPress={fijarOrigen}
-                  deshabilitado={!centroMapa}
-                />
+                <View style={styles.filaAccionesMapa}>
+                  <Button
+                    label="Fijar Origen"
+                    onPress={fijarOrigen}
+                    deshabilitado={!centroMapa}
+                    estilo={styles.botonMitad}
+                  />
+                  <Button
+                    label="📍 Plaza Huancavelica"
+                    variante="secundario"
+                    onPress={() => centrarEnHuancavelica()}
+                    estilo={styles.botonMitad}
+                  />
+                </View>
               </>
             ) : (
               <>
@@ -332,6 +359,16 @@ export default function PantallaMapa() {
                   testID="input-tarifa"
                   style={styles.inputTarifa}
                 />
+                {!perfil?.telefono_verificado && (
+                  <Pressable
+                    style={styles.alertaVerificacion}
+                    onPress={() => router.push('/(tabs)/perfil')}
+                  >
+                    <Text style={styles.textoAlertaVerificacion}>
+                      🔒 Teléfono no verificado. Toca aquí para validarlo con tu código OTP antes de pedir taxi.
+                    </Text>
+                  </Pressable>
+                )}
                 <Button
                   label="Pedir Taxi"
                   onPress={() => void pedirTaxi()}
@@ -640,5 +677,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: colores.texto,
+  },
+  filaAccionesMapa: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  alertaVerificacion: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+  },
+  textoAlertaVerificacion: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#92400E',
+    lineHeight: 16,
+    textAlign: 'center',
   },
 });
