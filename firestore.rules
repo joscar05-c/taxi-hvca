@@ -22,12 +22,8 @@ service cloud.firestore {
 
     // 2. Solicitudes de viaje
     match /solicitudes_viaje/{solicitudId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() ||
-        resource.data.estado == 'buscando' ||
-        resource.data.pasajero_id == request.auth.uid ||
-        resource.data.conductor_id == request.auth.uid
-      );
+      // Cualquier usuario autenticado puede leer para sincronizar en tiempo real el radar y cambios de estado
+      allow read: if isAuthenticated();
       allow create: if (isAuthenticated() && request.resource.data.pasajero_id == request.auth.uid) || isAdmin();
       allow update: if isAuthenticated() && (
         isAdmin() ||
