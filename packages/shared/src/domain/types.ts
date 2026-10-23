@@ -8,6 +8,22 @@ export type Coordenadas = {
   longitude: number;
 };
 
+/** Coordenadas céntricas de Huancavelica para referencia y simulación en desarrollo/emulador. */
+export const HUANCAVELICA_CENTRO: Coordenadas = {
+  latitude: -12.7865,
+  longitude: -74.9757,
+};
+
+/** Puntos representativos de Huancavelica para simulador y pruebas de campo. */
+export const PUNTOS_SIMULACION_HVCA = [
+  { id: 'plaza', nombre: 'Plaza de Armas', latitude: -12.7865, longitude: -74.9757 },
+  { id: 'san_cristobal', nombre: 'San Cristóbal', latitude: -12.7892, longitude: -74.971 },
+  { id: 'terminal', nombre: 'Terminal (Yananaco)', latitude: -12.781, longitude: -74.979 },
+  { id: 'ascension', nombre: 'Ascensión', latitude: -12.7915, longitude: -74.982 },
+] as const;
+
+export type PuntoSimulacionHvca = (typeof PUNTOS_SIMULACION_HVCA)[number];
+
 /**
  * Perfil de usuario en Supabase. La columna `id` se vincula 1:1 con
  * `auth.users.id`. Debe ser `type` (no `interface`): las interfaces no

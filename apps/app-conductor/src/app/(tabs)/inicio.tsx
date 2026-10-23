@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   Button,
@@ -7,11 +7,14 @@ import {
   authRepository,
   calcularDistanciaHaversine,
   colores,
+  HUANCAVELICA_CENTRO,
+  PUNTOS_SIMULACION_HVCA,
   useAuth,
   useBackgroundLocation,
   useForegroundLocation,
   viajesRepository,
   type Coordenadas,
+  type PuntoSimulacionHvca,
   type SolicitudViaje,
 } from '@hvca/shared';
 
@@ -82,20 +85,70 @@ export default function PantallaInicio() {
     if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
   }, [perfil?.vehiculo]);
 
-  // Posición del conductor: la del primer plano si ya la tenemos; si no,
-  // la última `ubicacion_actual` (EWKT) persistida en la BD.
+  // Modo simulación Huancavelica para desarrollo y emuladores
+  const [simularHuancavelica, setSimularHuancavelica] = useState(false);
+  const [puntoSimulado, setPuntoSimulado] = useState<PuntoSimulacionHvca>(
+    PUNTOS_SIMULACION_HVCA[0],
+  );
+
+  // Detectar si el GPS actual reporta ubicación fuera de Huancavelica (típico de emuladores en EE.UU.)
+  const esEmuladorFueraDeHvca = useMemo(() => {
+    if (!coords) return false;
+    const d = calcularDistanciaHaversine(
+      coords.latitude,
+      coords.longitude,
+      HUANCAVELICA_CENTRO.latitude,
+      HUANCAVELICA_CENTRO.longitude,
+    );
+    return d > 100;
+  }, [coords]);
+
+  // Si detectamos emulador fuera de Huancavelica, activar la simulación por defecto
+  useEffect(() => {
+    if (esEmuladorFueraDeHvca) {
+      setSimularHuancavelica(true);
+    }
+  }, [esEmuladorFueraDeHvca]);
+
+  // Posición efectiva del conductor: simulada si está activa, de lo contrario GPS
   const ubicacionConductor = useMemo<Coordenadas | null>(() => {
+    if (simularHuancavelica) {
+      return { latitude: puntoSimulado.latitude, longitude: puntoSimulado.longitude };
+    }
     if (coords) {
       return { latitude: coords.latitude, longitude: coords.longitude };
     }
     return parsearPuntoPostgis(perfil?.ubicacion_actual ?? null);
-  }, [coords, perfil]);
+  }, [simularHuancavelica, puntoSimulado, coords, perfil]);
+
+  // Buffer de todas las solicitudes activas para evitar descartar si el GPS tarda en inicializar
+  const solicitudesPendientesRef = useRef<Map<string, SolicitudViaje>>(new Map());
 
   // Ref para leer la posición dentro del callback realtime sin resuscribir.
   const ubicacionRef = useRef(ubicacionConductor);
+
+  // Reevalúa todas las solicitudes buffered contra una posición dada
+  const recalcularCercanas = useCallback((pos: Coordenadas | null) => {
+    if (!pos) return;
+    const filtradas: SolicitudCercana[] = [];
+    solicitudesPendientesRef.current.forEach((solicitud) => {
+      const distanciaKm = calcularDistanciaHaversine(
+        solicitud.origen_lat,
+        solicitud.origen_lng,
+        pos.latitude,
+        pos.longitude,
+      );
+      if (distanciaKm < DISTANCIA_MAX_KM) {
+        filtradas.push({ solicitud, distanciaKm });
+      }
+    });
+    setSolicitudesCercanas(filtradas);
+  }, []);
+
   useEffect(() => {
     ubicacionRef.current = ubicacionConductor;
-  }, [ubicacionConductor]);
+    recalcularCercanas(ubicacionConductor);
+  }, [ubicacionConductor, recalcularCercanas]);
 
   // Al conectarse pedimos una posición en primer plano para medir distancias.
   useEffect(() => {
@@ -104,26 +157,31 @@ export default function PantallaInicio() {
     }
   }, [isTracking, requestPermissionAndLocate]);
 
-  const manejarNuevaSolicitud = useCallback((solicitud: SolicitudViaje) => {
-    const pos = ubicacionRef.current;
-    if (!pos) return;
+  const manejarNuevaSolicitud = useCallback(
+    (solicitud: SolicitudViaje) => {
+      // Guardar en el buffer persistente
+      solicitudesPendientesRef.current.set(solicitud.id, solicitud);
+      const pos = ubicacionRef.current;
+      if (!pos) return; // Se reevaluará cuando se obtenga la ubicación gracias a recalcularCercanas
 
-    const distanciaKm = calcularDistanciaHaversine(
-      solicitud.origen_lat,
-      solicitud.origen_lng,
-      pos.latitude,
-      pos.longitude,
-    );
-    if (distanciaKm >= DISTANCIA_MAX_KM) return;
+      const distanciaKm = calcularDistanciaHaversine(
+        solicitud.origen_lat,
+        solicitud.origen_lng,
+        pos.latitude,
+        pos.longitude,
+      );
+      if (distanciaKm >= DISTANCIA_MAX_KM) return;
 
-    setSolicitudesCercanas((prev) =>
-      prev.some((s) => s.solicitud.id === solicitud.id)
-        ? prev
-        : [...prev, { solicitud, distanciaKm }],
-    );
-  }, []);
+      setSolicitudesCercanas((prev) => {
+        const sinEsta = prev.filter((s) => s.solicitud.id !== solicitud.id);
+        return [...sinEsta, { solicitud, distanciaKm }];
+      });
+    },
+    [],
+  );
 
   const manejarSolicitudEliminada = useCallback((solicitudId: string) => {
+    solicitudesPendientesRef.current.delete(solicitudId);
     setSolicitudesCercanas((prev) =>
       prev.filter((s) => s.solicitud.id !== solicitudId),
     );
@@ -439,6 +497,58 @@ export default function PantallaInicio() {
         ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
+      </View>
+
+      {/* Selector de Simulación de Ubicación Huancavelica */}
+      <View style={styles.cardSimulador}>
+        <View style={styles.filaSimuladorHeader}>
+          <View style={styles.textosSimulador}>
+            <Text style={styles.tituloSimulador}>📍 Simulación Huancavelica</Text>
+            <Text style={styles.descripcionSimulador}>
+              {simularHuancavelica
+                ? `${puntoSimulado.nombre} (${puntoSimulado.latitude.toFixed(4)}, ${puntoSimulado.longitude.toFixed(4)})`
+                : 'Ubicación GPS de tu dispositivo'}
+            </Text>
+          </View>
+          <Switch
+            value={simularHuancavelica}
+            onValueChange={setSimularHuancavelica}
+            trackColor={{ false: '#D1D5DB', true: colores.primario }}
+            thumbColor={simularHuancavelica ? '#ffffff' : '#f4f3f4'}
+          />
+        </View>
+
+        {esEmuladorFueraDeHvca && !simularHuancavelica && (
+          <View style={styles.avisoEmulador}>
+            <Text style={styles.textoAvisoEmulador}>
+              ⚠️ Emulador detectado fuera de Huancavelica. Activa la simulación para recibir viajes locales (a menos de 3 km).
+            </Text>
+          </View>
+        )}
+
+        {simularHuancavelica && (
+          <View style={styles.puntosContainer}>
+            <Text style={styles.subtituloSimulador}>Punto de inicio en Huancavelica:</Text>
+            <View style={styles.filaChips}>
+              {PUNTOS_SIMULACION_HVCA.map((p) => {
+                const seleccionado = puntoSimulado.id === p.id;
+                return (
+                  <Pressable
+                    key={p.id}
+                    style={[styles.chipPunto, seleccionado && styles.chipPuntoActivo]}
+                    onPress={() => setPuntoSimulado(p)}
+                  >
+                    <Text
+                      style={[styles.textoChip, seleccionado && styles.textoChipActivo]}
+                    >
+                      {p.nombre}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        )}
       </View>
 
       {viajeActivo ? (
@@ -801,5 +911,88 @@ const styles = StyleSheet.create({
   logoutTexto: {
     color: colores.textoSuave,
     fontWeight: '600',
+  },
+  cardSimulador: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  filaSimuladorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  textosSimulador: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  tituloSimulador: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  descripcionSimulador: {
+    fontSize: 12,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
+  avisoEmulador: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  textoAvisoEmulador: {
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 16,
+  },
+  puntosContainer: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    paddingTop: 12,
+  },
+  subtituloSimulador: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colores.textoSuave,
+    marginBottom: 8,
+  },
+  filaChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chipPunto: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  chipPuntoActivo: {
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
+  },
+  textoChip: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: colores.texto,
+  },
+  textoChipActivo: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
 });

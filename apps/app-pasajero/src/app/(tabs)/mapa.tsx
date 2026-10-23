@@ -14,7 +14,10 @@ import {
   Button,
   Input,
   authRepository,
+  calcularDistanciaHaversine,
   colores,
+  HUANCAVELICA_CENTRO,
+  PUNTOS_SIMULACION_HVCA,
   useAuth,
   useForegroundLocation,
   viajesRepository,
@@ -68,13 +71,30 @@ export default function PantallaMapa() {
   }, [requestPermissionAndLocate]);
 
   useEffect(() => {
-    if (coords && !centroMapa) {
-      setCentroMapa({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-      });
+    if (!centroMapa) {
+      if (coords) {
+        const d = calcularDistanciaHaversine(
+          coords.latitude,
+          coords.longitude,
+          HUANCAVELICA_CENTRO.latitude,
+          HUANCAVELICA_CENTRO.longitude,
+        );
+        // Si el dispositivo está a más de 100km (típico emulador en EE.UU.), centrar en Huancavelica
+        if (d < 100) {
+          setCentroMapa({ latitude: coords.latitude, longitude: coords.longitude });
+        } else {
+          setCentroMapa(HUANCAVELICA_CENTRO);
+        }
+      } else {
+        setCentroMapa(HUANCAVELICA_CENTRO);
+      }
     }
   }, [coords, centroMapa]);
+
+  function centrarEnHuancavelica(punto: Coordenadas = HUANCAVELICA_CENTRO) {
+    setCentroMapa(punto);
+    setMensaje('Mapa centrado en Huancavelica.');
+  }
 
   // Suscripción en tiempo real a las ofertas de la solicitud activa.
   // Se cancela en cuanto se acepta una oferta (ya no interesan más ofertas).
