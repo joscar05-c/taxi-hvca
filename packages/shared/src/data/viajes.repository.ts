@@ -119,53 +119,75 @@ export const viajesRepository = {
 
   /**
    * Escucha en tiempo real la aparición de solicitudes en estado `buscando`.
-   * Devuelve una función para cancelar la suscripción.
+   * Notifica altas/modificaciones y bajas (cuando una solicitud es cancelada o aceptada).
    */
   suscribirNuevasSolicitudes(
     callback: (solicitud: SolicitudViaje) => void,
+    onRemoved?: (solicitudId: string) => void,
+    onError?: (error: Error) => void,
   ): () => void {
     const q = query(
       collection(db, COLECCION_SOLICITUDES),
       where('estado', '==', 'buscando'),
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added' || change.type === 'modified') {
-          callback({
-            id: change.doc.id,
-            ...change.doc.data(),
-          } as SolicitudViaje);
-        }
-      });
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' || change.type === 'modified') {
+            callback({
+              id: change.doc.id,
+              ...change.doc.data(),
+            } as SolicitudViaje);
+          } else if (change.type === 'removed') {
+            onRemoved?.(change.doc.id);
+          }
+        });
+      },
+      (error) => {
+        console.warn('[viajesRepository] Error en suscribirNuevasSolicitudes:', error);
+        onError?.(error);
+      },
+    );
 
     return unsubscribe;
   },
 
   /**
-   * Escucha en tiempo real las ofertas recibidas para una solicitud.
+   * Escucha en tiempo real las ofertas recibidas para una solicitud (creadas o actualizadas).
    * Devuelve una función para cancelar la suscripción.
    */
   suscribirOfertas(
     solicitudId: string,
     callback: (oferta: OfertaConductor) => void,
+    onRemoved?: (ofertaId: string) => void,
+    onError?: (error: Error) => void,
   ): () => void {
     const q = query(
       collection(db, COLECCION_OFERTAS),
       where('solicitud_id', '==', solicitudId),
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          callback({
-            id: change.doc.id,
-            ...change.doc.data(),
-          } as OfertaConductor);
-        }
-      });
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' || change.type === 'modified') {
+            callback({
+              id: change.doc.id,
+              ...change.doc.data(),
+            } as OfertaConductor);
+          } else if (change.type === 'removed') {
+            onRemoved?.(change.doc.id);
+          }
+        });
+      },
+      (error) => {
+        console.warn('[viajesRepository] Error en suscribirOfertas:', error);
+        onError?.(error);
+      },
+    );
 
     return unsubscribe;
   },
@@ -177,16 +199,24 @@ export const viajesRepository = {
   suscribirCambiosSolicitud(
     solicitudId: string,
     callback: (solicitud: SolicitudViaje) => void,
+    onError?: (error: Error) => void,
   ): () => void {
     const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
-    const unsubscribe = onSnapshot(docRef, (snap) => {
-      if (snap.exists()) {
-        callback({
-          id: snap.id,
-          ...snap.data(),
-        } as SolicitudViaje);
-      }
-    });
+    const unsubscribe = onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          callback({
+            id: snap.id,
+            ...snap.data(),
+          } as SolicitudViaje);
+        }
+      },
+      (error) => {
+        console.warn('[viajesRepository] Error en suscribirCambiosSolicitud:', error);
+        onError?.(error);
+      },
+    );
 
     return unsubscribe;
   },

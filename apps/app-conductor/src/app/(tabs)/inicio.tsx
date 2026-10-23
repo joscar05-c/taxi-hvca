@@ -123,10 +123,19 @@ export default function PantallaInicio() {
     );
   }, []);
 
+  const manejarSolicitudEliminada = useCallback((solicitudId: string) => {
+    setSolicitudesCercanas((prev) =>
+      prev.filter((s) => s.solicitud.id !== solicitudId),
+    );
+  }, []);
+
   useEffect(() => {
     if (!isTracking) return;
-    return viajesRepository.suscribirNuevasSolicitudes(manejarNuevaSolicitud);
-  }, [isTracking, manejarNuevaSolicitud]);
+    return viajesRepository.suscribirNuevasSolicitudes(
+      manejarNuevaSolicitud,
+      manejarSolicitudEliminada,
+    );
+  }, [isTracking, manejarNuevaSolicitud, manejarSolicitudEliminada]);
 
   // Por cada solicitud con oferta enviada, escuchamos si el pasajero la
   // acepta. La suscripción se cancela al cambiar la lista o al desmontar, y
