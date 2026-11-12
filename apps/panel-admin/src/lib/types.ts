@@ -47,3 +47,12 @@ export interface OfertaConductor {
   precio: number;
   created_at: string;
 }
+
+export interface ConfiguracionTarifas {
+  tarifa_base: number;
+  precio_por_km: number;
+  tarifa_minima: number;
+  comision_porcentaje: number;
+  updated_at: string;
+  updated_by?: string | null;
+}

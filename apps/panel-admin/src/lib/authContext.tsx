@@ -36,7 +36,7 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 function obtenerListaAdminsPermitidos(): string[] {
-  const envAdmins = process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'locomancocapac@gmail.com';
+  const envAdmins = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
   return envAdmins
     .split(',')
     .map((e) => e.trim().toLowerCase())

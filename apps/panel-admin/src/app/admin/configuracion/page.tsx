@@ -1,27 +1,117 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import {
+  AlertCircle,
+  CheckCircle,
   DollarSign,
   Save,
   Server,
-  CheckCircle,
 } from 'lucide-react';
 
 import { AuthGuard } from '@/components/AuthGuard';
 import { Header } from '@/components/Header';
+import { useAuth } from '@/lib/authContext';
+import { db } from '@/lib/firebase';
+import type { ConfiguracionTarifas } from '@/lib/types';
+
+const COLECCION_CONFIGURACION = 'configuracion_plataforma';
+const DOC_TARIFAS = 'tarifas';
 
 export default function ConfiguracionPage() {
+  const { user } = useAuth();
   const [tarifaBase, setTarifaBase] = useState('3.50');
   const [precioKm, setPrecioKm] = useState('1.80');
   const [tarifaMinima, setTarifaMinima] = useState('5.00');
   const [comision, setComision] = useState('10');
+  const [ultimaActualizacion, setUltimaActualizacion] = useState<string | null>(null);
+  const [actualizadoPor, setActualizadoPor] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
   const [guardado, setGuardado] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function handleGuardar(e: React.FormEvent) {
+  useEffect(() => {
+    const ref = doc(db, COLECCION_CONFIGURACION, DOC_TARIFAS);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Partial<ConfiguracionTarifas>;
+          if (typeof data.tarifa_base === 'number') {
+            setTarifaBase(data.tarifa_base.toFixed(2));
+          }
+          if (typeof data.precio_por_km === 'number') {
+            setPrecioKm(data.precio_por_km.toFixed(2));
+          }
+          if (typeof data.tarifa_minima === 'number') {
+            setTarifaMinima(data.tarifa_minima.toFixed(2));
+          }
+          if (typeof data.comision_porcentaje === 'number') {
+            setComision(String(data.comision_porcentaje));
+          }
+          setUltimaActualizacion(data.updated_at ?? null);
+          setActualizadoPor(data.updated_by ?? null);
+        }
+        setCargando(false);
+      },
+      (err) => {
+        console.error('Error al leer configuración de tarifas:', err);
+        setError('No se pudo sincronizar la configuración desde Firestore.');
+        setCargando(false);
+      },
+    );
+
+    return () => unsub();
+  }, []);
+
+  async function handleGuardar(e: React.FormEvent) {
     e.preventDefault();
-    setGuardado(true);
-    setTimeout(() => setGuardado(false), 3000);
+    setError(null);
+    setGuardado(false);
+
+    const numBase = parseFloat(tarifaBase);
+    const numKm = parseFloat(precioKm);
+    const numMinima = parseFloat(tarifaMinima);
+    const numComision = parseFloat(comision);
+
+    if (!Number.isFinite(numBase) || numBase < 0) {
+      setError('La tarifa base debe ser un número mayor o igual a 0.');
+      return;
+    }
+    if (!Number.isFinite(numKm) || numKm < 0) {
+      setError('El precio por kilómetro debe ser mayor o igual a 0.');
+      return;
+    }
+    if (!Number.isFinite(numMinima) || numMinima <= 0) {
+      setError('La tarifa mínima por viaje debe ser mayor a 0.');
+      return;
+    }
+    if (!Number.isFinite(numComision) || numComision < 0 || numComision > 100) {
+      setError('La comisión debe estar entre 0% y 100%.');
+      return;
+    }
+
+    setGuardando(true);
+    try {
+      const payload: ConfiguracionTarifas = {
+        tarifa_base: Math.round(numBase * 100) / 100,
+        precio_por_km: Math.round(numKm * 100) / 100,
+        tarifa_minima: Math.round(numMinima * 100) / 100,
+        comision_porcentaje: Math.round(numComision * 100) / 100,
+        updated_at: new Date().toISOString(),
+        updated_by: user?.email ?? user?.uid ?? null,
+      };
+
+      await setDoc(doc(db, COLECCION_CONFIGURACION, DOC_TARIFAS), payload);
+      setGuardado(true);
+      setTimeout(() => setGuardado(false), 3000);
+    } catch (err: any) {
+      setError(err?.message || 'Error al guardar los parámetros en Firestore.');
+    } finally {
+      setGuardando(false);
+    }
   }
 
   return (
@@ -41,10 +131,17 @@ export default function ConfiguracionPage() {
                 Parámetros de Tarifas y Precios
               </h3>
               <p className="text-xs text-gray-400">
-                Ajusta las tarifas estimadas calculadas en las apps móviles
+                Sincronizados en tiempo real con las apps móviles mediante Firestore
               </p>
             </div>
           </div>
+
+          {error && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
           <form onSubmit={handleGuardar} className="space-y-4">
             <div>
@@ -54,9 +151,11 @@ export default function ConfiguracionPage() {
               <input
                 type="number"
                 step="0.10"
+                min="0"
+                disabled={cargando || guardando}
                 value={tarifaBase}
                 onChange={(e) => setTarifaBase(e.target.value)}
-                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none disabled:opacity-50"
               />
             </div>
 
@@ -67,9 +166,11 @@ export default function ConfiguracionPage() {
               <input
                 type="number"
                 step="0.10"
+                min="0"
+                disabled={cargando || guardando}
                 value={precioKm}
                 onChange={(e) => setPrecioKm(e.target.value)}
-                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none disabled:opacity-50"
               />
             </div>
 
@@ -80,9 +181,11 @@ export default function ConfiguracionPage() {
               <input
                 type="number"
                 step="0.50"
+                min="0.50"
+                disabled={cargando || guardando}
                 value={tarifaMinima}
                 onChange={(e) => setTarifaMinima(e.target.value)}
-                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none disabled:opacity-50"
               />
             </div>
 
@@ -93,26 +196,37 @@ export default function ConfiguracionPage() {
               <input
                 type="number"
                 step="1"
+                min="0"
+                max="100"
+                disabled={cargando || guardando}
                 value={comision}
                 onChange={(e) => setComision(e.target.value)}
-                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-sm text-white focus:border-emerald-500 focus:outline-none disabled:opacity-50"
               />
             </div>
+
+            {ultimaActualizacion && (
+              <p className="text-[11px] text-gray-500">
+                Última actualización: {new Date(ultimaActualizacion).toLocaleString()}{' '}
+                {actualizadoPor ? `por ${actualizadoPor}` : ''}
+              </p>
+            )}
 
             <div className="pt-4 flex items-center justify-between">
               {guardado ? (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
                   <CheckCircle className="h-4 w-4" />
-                  Cambios aplicados exitosamente
+                  Cambios guardados en Firestore
                 </span>
               ) : <div />}
 
               <button
                 type="submit"
-                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-500/20 hover:from-emerald-600 hover:to-teal-600 transition-all"
+                disabled={cargando || guardando}
+                className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-emerald-500/20 hover:from-emerald-600 hover:to-teal-600 transition-all disabled:opacity-50"
               >
                 <Save className="h-4 w-4" />
-                Guardar Parámetros
+                {guardando ? 'Guardando...' : 'Guardar Parámetros'}
               </button>
             </div>
           </form>
@@ -156,7 +270,7 @@ export default function ConfiguracionPage() {
             <div className="flex items-center justify-between rounded-xl bg-gray-900/60 p-3.5 border border-gray-800">
               <span className="text-gray-400">Reglas de Seguridad:</span>
               <span className="font-medium text-purple-400">
-                v2 con rol Administrador
+                v2 con rol Administrador y Transacciones
               </span>
             </div>
 

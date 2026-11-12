@@ -15,14 +15,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Button,
   Input,
+  TARIFAS_POR_DEFECTO,
   authRepository,
   calcularDistanciaHaversine,
+  calcularTarifa,
   colores,
   HUANCAVELICA_CENTRO,
   PUNTOS_SIMULACION_HVCA,
   useAuth,
   useForegroundLocation,
   viajesRepository,
+  type ConfiguracionTarifas,
   type Coordenadas,
   type OfertaConductor,
   type Profile,
@@ -59,6 +62,8 @@ export default function PantallaMapa() {
   const [originCoords, setOriginCoords] = useState<Coordenadas | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<Coordenadas | null>(null);
   const [tarifa, setTarifa] = useState('');
+  const [configTarifas, setConfigTarifas] =
+    useState<ConfiguracionTarifas>(TARIFAS_POR_DEFECTO);
   const [solicitud, setSolicitud] = useState<SolicitudViaje | null>(null);
   const [ofertas, setOfertas] = useState<OfertaConductor[]>([]);
   const [viajeAceptado, setViajeAceptado] = useState<SolicitudViaje | null>(null);
@@ -72,6 +77,12 @@ export default function PantallaMapa() {
   useEffect(() => {
     void requestPermissionAndLocate();
   }, [requestPermissionAndLocate]);
+
+  useEffect(() => {
+    return viajesRepository.suscribirConfiguracionTarifas((nuevaConfig) => {
+      setConfigTarifas(nuevaConfig);
+    });
+  }, []);
 
   useEffect(() => {
     if (!centroMapa) {
@@ -145,7 +156,28 @@ export default function PantallaMapa() {
   function fijarDestino() {
     if (!centroMapa) return;
     setDestinoCoords(centroMapa);
-    setMensaje('Destino fijado.');
+    if (originCoords) {
+      const distKm = calcularDistanciaHaversine(
+        originCoords.latitude,
+        originCoords.longitude,
+        centroMapa.latitude,
+        centroMapa.longitude,
+      );
+      const desglose = calcularTarifa({
+        distanciaKm: distKm,
+        duracionMin: 0,
+        tarifaBase: configTarifas.tarifa_base,
+        tarifaPorKm: configTarifas.precio_por_km,
+        tarifaPorMin: 0,
+        tarifaMinima: configTarifas.tarifa_minima,
+      });
+      if (!tarifa.trim()) {
+        setTarifa(desglose.total.toFixed(2));
+      }
+      setMensaje(`Destino fijado. Tarifa sugerida: S/ ${desglose.total.toFixed(2)}`);
+    } else {
+      setMensaje('Destino fijado.');
+    }
     setError(null);
   }
 
@@ -169,7 +201,13 @@ export default function PantallaMapa() {
 
     const precio = parseFloat(tarifa.trim().replace(',', '.'));
     if (Number.isNaN(precio) || precio <= 0) {
-      setError('Ingresa una tarifa válida, por ejemplo 5.00.');
+      setError(`Ingresa una tarifa válida, por ejemplo ${configTarifas.tarifa_minima.toFixed(2)}.`);
+      return;
+    }
+    if (precio < configTarifas.tarifa_minima) {
+      setError(
+        `La tarifa mínima configurada es S/ ${configTarifas.tarifa_minima.toFixed(2)}.`,
+      );
       return;
     }
 
@@ -201,6 +239,7 @@ export default function PantallaMapa() {
         solicitud.id,
         oferta.conductor_id,
         oferta.precio,
+        oferta.id,
       );
       setViajeAceptado(viaje);
       setOfertas([]);

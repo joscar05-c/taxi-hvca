@@ -222,5 +222,21 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    // 5. Configuración global de la plataforma (tarifas y comisiones)
+    match /configuracion_plataforma/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() &&
+        request.resource.data.tarifa_base is number &&
+        request.resource.data.tarifa_base >= 0 &&
+        request.resource.data.precio_por_km is number &&
+        request.resource.data.precio_por_km >= 0 &&
+        request.resource.data.tarifa_minima is number &&
+        request.resource.data.tarifa_minima > 0 &&
+        request.resource.data.comision_porcentaje is number &&
+        request.resource.data.comision_porcentaje >= 0 &&
+        request.resource.data.comision_porcentaje <= 100;
+      allow delete: if isAdmin();
+    }
   }
 }

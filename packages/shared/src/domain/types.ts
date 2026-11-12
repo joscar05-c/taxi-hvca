@@ -115,6 +115,25 @@ export type OfertaConductor = {
   created_at: string;
 };
 
+/** Parámetros globales de tarifas y comisiones gestionados desde el Panel Admin. */
+export type ConfiguracionTarifas = {
+  tarifa_base: number;
+  precio_por_km: number;
+  tarifa_minima: number;
+  comision_porcentaje: number;
+  updated_at: string;
+  updated_by?: string | null;
+};
+
+export const TARIFAS_POR_DEFECTO: ConfiguracionTarifas = {
+  tarifa_base: 3.5,
+  precio_por_km: 1.8,
+  tarifa_minima: 5.0,
+  comision_porcentaje: 10,
+  updated_at: '',
+  updated_by: null,
+};
+
 /** @deprecated Usar `SolicitudViaje`. */
 export type RideRequest = {
   id: string;
