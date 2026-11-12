@@ -6,44 +6,221 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdmin() {
+      return isAuthenticated() &&
+        request.auth.token.email != null &&
+        request.auth.token.email in ['locomancocapac@gmail.com'];
+    }
+
     function isAdmin() {
       return isAuthenticated() && (
         request.auth.token.admin == true ||
-        get(/databases/$(database)/documents/perfiles/$(request.auth.uid)).data.rol == 'admin'
+        isBootstrapAdmin() ||
+        (
+          exists(/databases/$(database)/documents/perfiles/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/perfiles/$(request.auth.uid)).data.rol == 'admin'
+        )
       );
+    }
+
+    function hasVerifiedPhone(userId, phone) {
+      return (request.auth.token.phone_number != null && request.auth.token.phone_number == phone) ||
+        (
+          exists(/databases/$(database)/documents/verificaciones_telefono/$(userId)) &&
+          get(/databases/$(database)/documents/verificaciones_telefono/$(userId)).data.verificado == true &&
+          get(/databases/$(database)/documents/verificaciones_telefono/$(userId)).data.telefono == phone
+        );
     }
 
     // 1. Perfiles de usuario (pasajeros, conductores y administradores)
     match /perfiles/{userId} {
-      allow read: if isAuthenticated();
-      allow create, update: if (isAuthenticated() && request.auth.uid == userId) || isAdmin();
+      // Evitar raspado masivo (PII): solo administradores pueden listar todos los perfiles.
+      // Un usuario autenticado puede consultar su propio perfil o el de un conductor por ID.
+      allow get: if isOwner(userId) || isAdmin() || (isAuthenticated() && resource.data.rol == 'conductor');
+      allow list: if isAdmin();
+
+      // Creación: los usuarios normales solo pueden registrarse como 'pasajero' o 'conductor',
+      // nunca como 'admin', ni auto-verificarse el teléfono sin respaldo.
+      allow create: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.id == userId &&
+        request.resource.data.rol in ['pasajero', 'conductor'] &&
+        request.resource.data.calificacion_promedio == 5.0 &&
+        (
+          request.resource.data.telefono_verificado == false ||
+          hasVerifiedPhone(userId, request.resource.data.telefono)
+        )
+      );
+
+      // Actualización: impide escalada de privilegios (cambio de rol/id/calificación)
+      // y exige verificación real en verificaciones_telefono para marcar telefono_verificado = true.
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.rol == resource.data.rol &&
+        request.resource.data.rol in ['pasajero', 'conductor'] &&
+        request.resource.data.calificacion_promedio == resource.data.calificacion_promedio &&
+        request.resource.data.created_at == resource.data.created_at &&
+        (
+          request.resource.data.telefono_verificado == false ||
+          (
+            resource.data.telefono_verificado == true &&
+            request.resource.data.telefono == resource.data.telefono
+          ) ||
+          hasVerifiedPhone(userId, request.resource.data.telefono)
+        )
+      );
+
       allow delete: if isAdmin();
     }
 
     // 2. Solicitudes de viaje
     match /solicitudes_viaje/{solicitudId} {
-      // Cualquier usuario autenticado puede leer para sincronizar en tiempo real el radar y cambios de estado
-      allow read: if isAuthenticated();
-      allow create: if (isAuthenticated() && request.resource.data.pasajero_id == request.auth.uid) || isAdmin();
-      allow update: if isAuthenticated() && (
+      // Lectura puntual: pasajero dueño, conductor asignado, admin, o solicitudes en radar/transición.
+      allow get: if isAuthenticated() && (
         isAdmin() ||
         resource.data.pasajero_id == request.auth.uid ||
         resource.data.conductor_id == request.auth.uid ||
+        resource.data.estado in ['buscando', 'aceptado', 'cancelada']
+      );
+
+      // Listado: los usuarios no pueden listar el historial privado de viajes de terceros.
+      allow list: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.estado == 'buscando' ||
+        resource.data.pasajero_id == request.auth.uid ||
+        resource.data.conductor_id == request.auth.uid
+      );
+
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.pasajero_id == request.auth.uid &&
+        request.resource.data.estado == 'buscando' &&
+        request.resource.data.conductor_id == null &&
+        request.resource.data.precio_final == null &&
+        request.resource.data.precio_inicial is number &&
+        request.resource.data.precio_inicial > 0
+      );
+
+      // Actualización restringida por rol, campos modificados y máquina de estados:
+      allow update: if isAdmin() || (
+        isAuthenticated() && (
+          // A) Pasajero acepta una oferta de un conductor
+          (
+            resource.data.pasajero_id == request.auth.uid &&
+            resource.data.estado == 'buscando' &&
+            request.resource.data.estado == 'aceptado' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'conductor_id', 'precio_final']) &&
+            request.resource.data.conductor_id is string &&
+            request.resource.data.conductor_id.size() > 0 &&
+            request.resource.data.precio_final is number &&
+            request.resource.data.precio_final > 0
+          ) ||
+          // B) Pasajero cancela su solicitud activa
+          (
+            resource.data.pasajero_id == request.auth.uid &&
+            !(resource.data.estado in ['completado', 'cancelada']) &&
+            request.resource.data.estado == 'cancelada' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado'])
+          ) ||
+          // C) Conductor asignado avanza el estado del viaje en orden secuencial
+          (
+            resource.data.conductor_id == request.auth.uid &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado']) &&
+            (
+              (resource.data.estado == 'aceptado' && request.resource.data.estado == 'en_camino_origen') ||
+              (resource.data.estado == 'en_camino_origen' && request.resource.data.estado == 'en_curso') ||
+              (resource.data.estado == 'en_curso' && request.resource.data.estado == 'completado')
+            )
+          )
+        )
+      );
+
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.pasajero_id == request.auth.uid &&
         resource.data.estado == 'buscando'
       );
-      allow delete: if (isAuthenticated() && resource.data.pasajero_id == request.auth.uid) || isAdmin();
     }
 
     // 3. Ofertas de conductores
     match /ofertas_conductores/{ofertaId} {
-      allow read: if isAuthenticated();
-      allow create: if (isAuthenticated() && request.resource.data.conductor_id == request.auth.uid) || isAdmin();
-      allow update, delete: if (isAuthenticated() && resource.data.conductor_id == request.auth.uid) || isAdmin();
+      // Solo pueden leer la oferta el conductor que la emitió, el pasajero dueño de la solicitud o un admin.
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.conductor_id == request.auth.uid ||
+        get(/databases/$(database)/documents/solicitudes_viaje/$(resource.data.solicitud_id)).data.pasajero_id == request.auth.uid
+      );
+
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.conductor_id == request.auth.uid &&
+        request.resource.data.precio is number &&
+        request.resource.data.precio > 0 &&
+        exists(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)) &&
+        get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.estado == 'buscando'
+      );
+
+      allow update, delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.conductor_id == request.auth.uid
+      );
     }
 
     // 4. Verificaciones de teléfono (OTP por SMS)
     match /verificaciones_telefono/{userId} {
-      allow read, write: if (isAuthenticated() && request.auth.uid == userId) || isAdmin();
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      // Solicitud inicial de OTP: requiere hash SHA-256 (64 caracteres hex), intentos = 0 y verificado = false.
+      allow create: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.usuario_id == userId &&
+        request.resource.data.intentos == 0 &&
+        request.resource.data.verificado == false &&
+        request.resource.data.codigo_hash is string &&
+        request.resource.data.codigo_hash.size() == 64 &&
+        !('codigo' in request.resource.data)
+      );
+
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.usuario_id == userId &&
+        !('codigo' in request.resource.data) &&
+        (
+          // Caso A: Generación de un nuevo código OTP (reinicia estado)
+          (
+            request.resource.data.intentos == 0 &&
+            request.resource.data.verificado == false &&
+            request.resource.data.codigo_hash is string &&
+            request.resource.data.codigo_hash.size() == 64
+          ) ||
+          // Caso B: Validación de intento o confirmación dentro del límite (máx 5 intentos)
+          (
+            resource.data.intentos < 5 &&
+            resource.data.verificado == false &&
+            request.resource.data.telefono == resource.data.telefono &&
+            request.resource.data.codigo_hash == resource.data.codigo_hash &&
+            request.resource.data.expira_en == resource.data.expira_en &&
+            (
+              (
+                request.resource.data.verificado == false &&
+                request.resource.data.intentos == resource.data.intentos + 1
+              ) ||
+              (
+                request.resource.data.verificado == true &&
+                request.resource.data.intentos == resource.data.intentos
+              )
+            )
+          )
+        )
+      );
+
+      allow delete: if isAdmin();
     }
   }
 }

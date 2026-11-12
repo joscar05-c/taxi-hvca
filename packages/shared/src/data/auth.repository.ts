@@ -1,3 +1,4 @@
+import * as Crypto from 'expo-crypto';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -18,6 +19,32 @@ import { auth, db } from './firebaseClient';
 
 const COLECCION_PERFILES = 'perfiles';
 const COLECCION_VERIFICACIONES = 'verificaciones_telefono';
+const MAX_INTENTOS_OTP = 5;
+const COOLDOWN_REENVIO_MS = 60 * 1000;
+
+function esEntornoDesarrollo(): boolean {
+  const g = globalThis as { __DEV__?: boolean; process?: { env?: { NODE_ENV?: string } } };
+  if (typeof g.__DEV__ === 'boolean') return g.__DEV__;
+  return g.process?.env?.NODE_ENV !== 'production';
+}
+
+async function generarCodigoOtpSeguro(): Promise<string> {
+  const bytes = await Crypto.getRandomBytesAsync(4);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const numero = view.getUint32(0, false) % 900000;
+  return (100000 + numero).toString();
+}
+
+async function calcularHashOtp(
+  usuarioId: string,
+  telefono: string,
+  codigo: string,
+): Promise<string> {
+  return Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `${usuarioId}:${telefono}:${codigo}`,
+  );
+}
 
 export const authRepository = {
   /**
@@ -110,6 +137,7 @@ export const authRepository = {
 
   /**
    * Crea o inicializa el documento de perfil en Firestore.
+   * Garantiza que un cliente no pueda sobrescribir su rol ni auto-promoverse.
    */
   async crearPerfil(
     usuarioId: string,
@@ -123,10 +151,19 @@ export const authRepository = {
       telefono_verificado?: boolean;
     },
   ): Promise<Profile> {
+    const rolSeguro: Profile['rol'] =
+      datos.rol === 'conductor' ? 'conductor' : 'pasajero';
+
+    const docRef = doc(db, COLECCION_PERFILES, usuarioId);
+    const existente = await getDoc(docRef);
+    if (existente.exists()) {
+      return { id: existente.id, ...existente.data() } as Profile;
+    }
+
     const ahora = new Date().toISOString();
     const nuevoPerfil: Profile = {
       id: usuarioId,
-      rol: datos.rol,
+      rol: rolSeguro,
       nombre: datos.nombre,
       telefono: datos.telefono,
       telefono_verificado: datos.telefono_verificado ?? false,
@@ -141,18 +178,18 @@ export const authRepository = {
       updated_at: ahora,
     };
 
-    const docRef = doc(db, COLECCION_PERFILES, usuarioId);
-    await setDoc(docRef, nuevoPerfil, { merge: true });
+    await setDoc(docRef, nuevoPerfil);
     return nuevoPerfil;
   },
 
   /**
-   * Genera y registra un código OTP de 6 dígitos para verificar el teléfono del usuario.
-   * En entorno de desarrollo/pruebas, devuelve el código generado para facilitar la validación.
+   * Genera y registra un código OTP de 6 dígitos (almacenado como hash SHA-256)
+   * para verificar el teléfono del usuario.
+   * Solo en desarrollo devuelve `codigoSimuladoParaDev` para pruebas locales.
    */
   async solicitarCodigoVerificacionTelefono(
     numeroTelefono: string,
-  ): Promise<{ codigoSimuladoParaDev: string; expiraEn: string }> {
+  ): Promise<{ codigoSimuladoParaDev: string | null; expiraEn: string }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Debes iniciar sesión para verificar tu teléfono.');
 
@@ -161,26 +198,47 @@ export const authRepository = {
       throw new Error('Ingresa un número de celular peruano válido (9 dígitos comenzando con 9).');
     }
 
+    const verifDocRef = doc(db, COLECCION_VERIFICACIONES, user.uid);
+    const verifPrevia = await getDoc(verifDocRef);
+    const ahora = new Date();
+
+    if (verifPrevia.exists()) {
+      const previaData = verifPrevia.data() as VerificacionTelefono;
+      const creadoMs = Date.parse(previaData.created_at);
+      if (
+        !previaData.verificado &&
+        Number.isFinite(creadoMs) &&
+        ahora.getTime() - creadoMs < COOLDOWN_REENVIO_MS
+      ) {
+        const segsRestantes = Math.ceil(
+          (COOLDOWN_REENVIO_MS - (ahora.getTime() - creadoMs)) / 1000,
+        );
+        throw new Error(
+          `Por favor espera ${segsRestantes} segundos antes de solicitar un nuevo código.`,
+        );
+      }
+    }
+
     // Normalizar a formato nacional/internacional
     const soloDigitos = telLimpio.replace(/^\+?51/, '');
     const telNormalizado = `+51 ${soloDigitos}`;
 
-    // Si es un número ficticio de prueba de Firebase, usar código estándar '123456'
+    const esDev = esEntornoDesarrollo();
     const esNumeroPrueba =
-      soloDigitos === '999999999' ||
-      soloDigitos === '987654321' ||
-      soloDigitos === '999888777';
+      esDev &&
+      (soloDigitos === '999999999' ||
+        soloDigitos === '987654321' ||
+        soloDigitos === '999888777');
     const codigo = esNumeroPrueba
       ? '123456'
-      : Math.floor(100000 + Math.random() * 900000).toString();
-    const ahora = new Date();
+      : await generarCodigoOtpSeguro();
+    const codigoHash = await calcularHashOtp(user.uid, telNormalizado, codigo);
     const expiraEn = new Date(ahora.getTime() + 10 * 60 * 1000).toISOString(); // 10 min
 
-    const verifDocRef = doc(db, COLECCION_VERIFICACIONES, user.uid);
     await setDoc(verifDocRef, {
       usuario_id: user.uid,
       telefono: telNormalizado,
-      codigo,
+      codigo_hash: codigoHash,
       expira_en: expiraEn,
       intentos: 0,
       verificado: false,
@@ -188,21 +246,22 @@ export const authRepository = {
     });
 
     return {
-      codigoSimuladoParaDev: codigo,
+      codigoSimuladoParaDev: esDev ? codigo : null,
       expiraEn,
     };
   },
 
   /**
-   * Confirma el código OTP ingresado por el usuario y marca el teléfono como verificado.
+   * Confirma el código OTP ingresado por el usuario comparando su hash SHA-256,
+   * aplicando límite de intentos (anti fuerza bruta) y marcando el teléfono como verificado.
    */
   async confirmarCodigoTelefono(codigoIngresado: string): Promise<Profile> {
     const user = auth.currentUser;
     if (!user) throw new Error('Sesión no iniciada.');
 
     const codigoLimpio = codigoIngresado.trim();
-    if (codigoLimpio.length !== 6) {
-      throw new Error('El código debe tener 6 dígitos.');
+    if (!/^\d{6}$/.test(codigoLimpio)) {
+      throw new Error('El código debe tener 6 dígitos numéricos.');
     }
 
     const verifDocRef = doc(db, COLECCION_VERIFICACIONES, user.uid);
@@ -213,25 +272,40 @@ export const authRepository = {
     }
 
     const data = verifSnap.data() as VerificacionTelefono;
+    if (data.verificado) {
+      const perfilActual = await this.obtenerPerfil(user.uid);
+      if (perfilActual) return perfilActual;
+    }
+
+    const intentosActuales = data.intentos ?? 0;
+    if (intentosActuales >= MAX_INTENTOS_OTP) {
+      throw new Error(
+        'Has superado el número máximo de intentos permitidos. Solicita un nuevo código.',
+      );
+    }
+
     if (new Date() > new Date(data.expira_en)) {
       throw new Error('El código ha expirado. Por favor solicita uno nuevo.');
     }
 
-    const esPruebaValida =
-      codigoLimpio === '123456' &&
-      (data.telefono.includes('999999999') ||
-        data.telefono.includes('987654321') ||
-        data.telefono.includes('999888777'));
+    const hashIngresado = await calcularHashOtp(user.uid, data.telefono, codigoLimpio);
+    const coincideHash = Boolean(data.codigo_hash && data.codigo_hash === hashIngresado);
 
-    if (data.codigo !== codigoLimpio && !esPruebaValida) {
-      await updateDoc(verifDocRef, { intentos: (data.intentos || 0) + 1 });
-      throw new Error('Código de verificación incorrecto. Inténtalo nuevamente.');
+    if (!coincideHash) {
+      const nuevosIntentos = intentosActuales + 1;
+      await updateDoc(verifDocRef, { intentos: nuevosIntentos });
+      const restantes = Math.max(0, MAX_INTENTOS_OTP - nuevosIntentos);
+      throw new Error(
+        restantes > 0
+          ? `Código de verificación incorrecto. Te quedan ${restantes} intento(s).`
+          : 'Código incorrecto. Has agotado tus intentos; solicita un nuevo código.',
+      );
     }
 
-    // Código válido: marcar verificado en Firestore
+    // Código válido: marcar verificado en Firestore antes de actualizar el perfil
     await updateDoc(verifDocRef, { verificado: true });
 
-    // Actualizar perfil del usuario
+    // Actualizar perfil del usuario (las reglas de Firestore verifican que verificado == true)
     const perfilDocRef = doc(db, COLECCION_PERFILES, user.uid);
     const ahora = new Date().toISOString();
     await updateDoc(perfilDocRef, {

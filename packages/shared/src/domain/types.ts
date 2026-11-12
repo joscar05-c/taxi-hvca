@@ -50,7 +50,9 @@ export type Profile = {
 export type VerificacionTelefono = {
   usuario_id: string;
   telefono: string;
-  codigo: string;
+  codigo_hash: string;
+  /** @deprecated Solo compatibilidad de lectura; nunca persistir código en texto plano. */
+  codigo?: string;
   expira_en: string;
   intentos: number;
   verificado: boolean;

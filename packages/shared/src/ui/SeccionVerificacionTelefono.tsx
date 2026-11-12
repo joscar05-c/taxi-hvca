@@ -73,11 +73,17 @@ export function SeccionVerificacionTelefono({
       setCodigoDev(res.codigoSimuladoParaDev);
       setExito(`Código de 6 dígitos enviado por SMS a +51 ${limpio}`);
 
-      // Alerta informativa para facilitar la prueba inmediata
-      Alert.alert(
-        'Código SMS Enviado',
-        `Se ha enviado un código de verificación a tu celular: +51 ${limpio}\n\nCódigo de prueba: ${res.codigoSimuladoParaDev}`,
-      );
+      if (res.codigoSimuladoParaDev) {
+        Alert.alert(
+          'Código SMS Enviado (Modo Dev)',
+          `Se ha enviado un código de verificación a tu celular: +51 ${limpio}\n\nCódigo de prueba: ${res.codigoSimuladoParaDev}`,
+        );
+      } else {
+        Alert.alert(
+          'Código SMS Enviado',
+          `Se ha enviado un código de verificación de 6 dígitos a tu celular: +51 ${limpio}.`,
+        );
+      }
     } catch (e: any) {
       setError(e.message || 'No se pudo enviar el código de verificación.');
     } finally {

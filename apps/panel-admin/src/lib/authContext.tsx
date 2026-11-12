@@ -64,15 +64,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const emailUsuario = fbUser.email?.trim().toLowerCase() || '';
 
       try {
+        const tokenResult = await fbUser.getIdTokenResult();
+        const tieneClaimAdmin = tokenResult.claims.admin === true;
         const docRef = doc(db, 'perfiles', fbUser.uid);
         const snap = await getDoc(docRef);
 
         if (snap.exists()) {
           const perfilData = snap.data() as Profile;
-          // Verificación estricta: debe tener rol de admin en la base de datos
-          if (perfilData.rol === 'admin') {
+          // Verificación estricta: debe tener rol de admin en la base de datos o Custom Claim admin
+          if (perfilData.rol === 'admin' || tieneClaimAdmin) {
             setUser(fbUser);
-            setProfile({ ...perfilData, id: snap.id });
+            setProfile({ ...perfilData, id: snap.id, rol: 'admin' });
           } else {
             // Usuario existe pero es pasajero o conductor: Bloqueo inmediato
             await fbSignOut(auth);
@@ -83,12 +85,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             );
           }
         } else {
-          // El perfil no existe aún en Firestore. Solo se permite crear perfil admin
-          // si su correo coincide con la lista blanca de administradores iniciales.
+          // El perfil no existe aún en Firestore. Solo se permite inicializar perfil admin
+          // si posee el Custom Claim `admin` o coincide con el bootstrap admin validado por Firestore Rules.
           const adminsPermitidos = obtenerListaAdminsPermitidos();
-          const esAdminAutorizado = emailUsuario && adminsPermitidos.includes(emailUsuario);
+          const esAdminAutorizado =
+            tieneClaimAdmin || (Boolean(emailUsuario) && adminsPermitidos.includes(emailUsuario));
 
           if (esAdminAutorizado) {
+            const ahora = new Date().toISOString();
             const nuevoAdmin: Profile = {
               id: fbUser.uid,
               rol: 'admin',
@@ -98,8 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               calificacion_promedio: 5.0,
               estado: 'disponible',
               esta_conectado: true,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
+              created_at: ahora,
+              updated_at: ahora,
             };
             await setDoc(docRef, nuevoAdmin);
             setUser(fbUser);
