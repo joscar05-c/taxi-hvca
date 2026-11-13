@@ -25,9 +25,8 @@ export const PUNTOS_SIMULACION_HVCA = [
 export type PuntoSimulacionHvca = (typeof PUNTOS_SIMULACION_HVCA)[number];
 
 /**
- * Perfil de usuario en Supabase. La columna `id` se vincula 1:1 con
- * `auth.users.id`. Debe ser `type` (no `interface`): las interfaces no
- * reciben index signatures implícitas y rompen el tipado del cliente.
+ * Perfil de usuario en Cloud Firestore (`perfiles/{uid}`).
+ * El campo `id` se vincula 1:1 con el UID de Firebase Authentication.
  */
 export type Profile = {
   id: string;
@@ -46,7 +45,7 @@ export type Profile = {
   updated_at: string;
 };
 
-/** Estado y registro del código SMS para verificación de número telefónico. */
+/** Estado y registro del código SMS para verificación de número telefónico (`verificaciones_telefono/{uid}`). */
 export type VerificacionTelefono = {
   usuario_id: string;
   telefono: string;
@@ -59,16 +58,7 @@ export type VerificacionTelefono = {
   created_at: string;
 };
 
-/** @deprecated Usar `SolicitudEstado`. */
-export type RideStatus =
-  | 'solicitada'
-  | 'aceptada'
-  | 'en_camino_origen'
-  | 'en_curso'
-  | 'completado'
-  | 'cancelada';
-
-/** Estados del flujo en tiempo real (tabla `solicitudes_viaje`). */
+/** Estados del flujo en tiempo real (colección `solicitudes_viaje`). */
 export type SolicitudEstado =
   | 'buscando'
   | 'aceptado'
@@ -132,68 +122,4 @@ export const TARIFAS_POR_DEFECTO: ConfiguracionTarifas = {
   comision_porcentaje: 10,
   updated_at: '',
   updated_by: null,
-};
-
-/** @deprecated Usar `SolicitudViaje`. */
-export type RideRequest = {
-  id: string;
-  pasajero_id: string;
-  origen_lat: number;
-  origen_lng: number;
-  destino_lat: number;
-  destino_lng: number;
-  tarifa_estimada: number;
-  estado: RideStatus;
-  conductor_id: string | null;
-  created_at: string;
-};
-
-/**
- * Esquema de la base de datos consumido por el cliente de Supabase.
- * Se ajusta al genérico `GenericSchema` de @supabase/supabase-js v2.
- * OJO: debe ser un `type` (no `interface`) — solo los aliases de tipo
- * reciben la *implicit index signature* que `Table` exige para
- * conformar con `Record<string, GenericTable>`.
- */
-export type Database = {
-  public: {
-    Tables: {
-      perfiles: {
-        Row: Profile;
-        Insert: Omit<
-          Profile,
-          | 'id'
-          | 'created_at'
-          | 'updated_at'
-          | 'esta_conectado'
-          | 'ubicacion_actual'
-          | 'vehiculo'
-        > & {
-          id: string;
-          esta_conectado?: boolean;
-          ubicacion_actual?: string | null;
-          vehiculo?: string | null;
-        };
-        Update: Partial<Profile>;
-        Relationships: [];
-      };
-      solicitudes_viaje: {
-        Row: SolicitudViaje;
-        Insert: Omit<
-          SolicitudViaje,
-          'id' | 'estado' | 'created_at' | 'conductor_id' | 'precio_final'
-        >;
-        Update: Partial<SolicitudViaje>;
-        Relationships: [];
-      };
-      ofertas_conductores: {
-        Row: OfertaConductor;
-        Insert: Omit<OfertaConductor, 'id' | 'created_at'>;
-        Update: Partial<OfertaConductor>;
-        Relationships: [];
-      };
-    };
-    Views: {};
-    Functions: {};
-  };
 };

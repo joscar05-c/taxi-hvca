@@ -1,6 +1,6 @@
 /**
  * Lógica de negocio pura: cálculo de tarifas.
- * No depende de Supabase, React ni React Native — puede testearse en aislamiento.
+ * No depende de Firebase, React ni React Native — puede testearse en aislamiento.
  */
 
 export interface TarifaInput {
@@ -11,7 +11,7 @@ export interface TarifaInput {
   tarifaPorMin: number;
   /** Multiplicador en horas pico o alta demanda (ej. 1.5 = +50%). */
   multiplicadorDemanda?: number;
-  /** Tarifa mínima garantizada (ej. 35 MXN). */
+  /** Tarifa mínima garantizada (ej. 5.00 PEN). */
   tarifaMinima?: number;
 }
 

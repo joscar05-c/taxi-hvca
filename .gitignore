@@ -15,9 +15,13 @@ out/
 .env.local
 .env.*.local
 
-# Nativos generados (Continuous Native Generation: no editar a mano)
+# Nativos generados y artefactos de compilación
 /android
 /ios
+**/android/build/
+**/android/.gradle/
+**/android/app/build/
+test_prefab_output/
 
 # npm
 npm-debug.log*
