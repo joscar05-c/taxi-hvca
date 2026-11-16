@@ -75,6 +75,7 @@ service cloud.firestore {
         )
       ) || (
         isAuthenticated() &&
+        userId != request.auth.uid &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'calificacion_promedio',
           'total_calificaciones',
@@ -82,7 +83,9 @@ service cloud.firestore {
         ]) &&
         request.resource.data.calificacion_promedio is number &&
         request.resource.data.calificacion_promedio >= 1 &&
-        request.resource.data.calificacion_promedio <= 5
+        request.resource.data.calificacion_promedio <= 5 &&
+        request.resource.data.total_calificaciones is int &&
+        request.resource.data.total_calificaciones >= 1
       );
 
       allow delete: if isAdmin();
@@ -255,7 +258,7 @@ service cloud.firestore {
 
     // 5. Configuración global de la plataforma (tarifas y comisiones)
     match /configuracion_plataforma/{docId} {
-      allow read: if isAuthenticated();
+      allow read: if docId == 'tarifas' || isAuthenticated();
       allow create, update: if isAdmin() &&
         request.resource.data.tarifa_base is number &&
         request.resource.data.tarifa_base >= 0 &&
@@ -277,7 +280,14 @@ service cloud.firestore {
         request.resource.data.evaluador_id == request.auth.uid &&
         request.resource.data.estrellas is number &&
         request.resource.data.estrellas >= 1 &&
-        request.resource.data.estrellas <= 5
+        request.resource.data.estrellas <= 5 &&
+        request.resource.data.solicitud_id is string &&
+        exists(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)) &&
+        get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.estado == 'completado' &&
+        (
+          get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.pasajero_id == request.auth.uid ||
+          get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.conductor_id == request.auth.uid
+        )
       );
       allow delete: if isAdmin();
     }

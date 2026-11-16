@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import {
   Car,
   Smartphone,
@@ -12,49 +13,130 @@ import {
   Download,
   ArrowRight,
   CheckCircle2,
-  Users,
   Navigation,
   Sparkles,
-  HelpCircle,
   ChevronDown,
   Lock,
-  Phone,
-  Clock,
-  ThumbsUp,
   Share2,
+  X,
+  ExternalLink,
 } from 'lucide-react';
+
+import { db } from '@/lib/firebase';
+import type { ConfiguracionTarifas } from '@/lib/types';
+import { useRealtimeSync } from '@/lib/useRealtimeSync';
+
+const TARIFAS_DEFAULT: ConfiguracionTarifas = {
+  tarifa_base: 3.5,
+  precio_por_km: 1.8,
+  tarifa_minima: 5.0,
+  comision_porcentaje: 0,
+  updated_at: '',
+};
+
+const RUTAS_BASE_HVCA = [
+  {
+    origen: 'Plaza de Armas',
+    destino: 'Barrio Ascensión',
+    distanciaKm: 3.2,
+  },
+  {
+    origen: 'Terminal Terrestre HVCA',
+    destino: 'Hospital Regional Zacarías Correa',
+    distanciaKm: 4.8,
+  },
+  {
+    origen: 'Barrio Santa Ana',
+    destino: 'San Cristóbal / Mirador',
+    distanciaKm: 2.9,
+  },
+  {
+    origen: 'Av. Andrés Avelino Cáceres',
+    destino: 'Plaza de Yananaco',
+    distanciaKm: 2.4,
+  },
+];
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'pasajero' | 'conductor'>('pasajero');
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
   const [selectedRoute, setSelectedRoute] = useState<number>(0);
+  const [tarifas, setTarifas] = useState<ConfiguracionTarifas>(TARIFAS_DEFAULT);
+  const [modalDescarga, setModalDescarga] = useState<'pasajero' | 'conductor' | null>(
+    null,
+  );
 
-  const rutasHVCA = [
-    {
-      origen: 'Plaza de Armas',
-      destino: 'Barrio Ascensión',
-      distancia: '3.2 km',
-      estimado: 'S/ 5.00 - 6.50',
-    },
-    {
-      origen: 'Terminal Terrestre HVCA',
-      destino: 'Hospital Regional Zacarías Correa',
-      distancia: '4.8 km',
-      estimado: 'S/ 6.50 - 8.00',
-    },
-    {
-      origen: 'Barrio Santa Ana',
-      destino: 'San Cristóbal / Mirador',
-      distancia: '2.9 km',
-      estimado: 'S/ 5.00 - 6.00',
-    },
-    {
-      origen: 'Av. Andrés Avelino Cáceres',
-      destino: 'Plaza de Yananaco',
-      distancia: '2.4 km',
-      estimado: 'S/ 4.50 - 5.50',
-    },
-  ];
+  const aplicarTarifas = useCallback((raw: Partial<ConfiguracionTarifas>) => {
+    setTarifas({
+      tarifa_base:
+        typeof raw.tarifa_base === 'number'
+          ? raw.tarifa_base
+          : TARIFAS_DEFAULT.tarifa_base,
+      precio_por_km:
+        typeof raw.precio_por_km === 'number'
+          ? raw.precio_por_km
+          : TARIFAS_DEFAULT.precio_por_km,
+      tarifa_minima:
+        typeof raw.tarifa_minima === 'number'
+          ? raw.tarifa_minima
+          : TARIFAS_DEFAULT.tarifa_minima,
+      comision_porcentaje:
+        typeof raw.comision_porcentaje === 'number'
+          ? raw.comision_porcentaje
+          : TARIFAS_DEFAULT.comision_porcentaje,
+      updated_at: raw.updated_at ?? '',
+      updated_by: raw.updated_by ?? null,
+    });
+  }, []);
+
+  const refrescarTarifasSilencioso = useCallback(async () => {
+    try {
+      const snap = await getDoc(doc(db, 'configuracion_plataforma', 'tarifas'));
+      if (snap.exists()) {
+        aplicarTarifas(snap.data() as Partial<ConfiguracionTarifas>);
+      }
+    } catch {
+      // Mantiene las tarifas en memoria si no hay conectividad
+    }
+  }, [aplicarTarifas]);
+
+  useRealtimeSync(refrescarTarifasSilencioso, 30000);
+
+  useEffect(() => {
+    const ref = doc(db, 'configuracion_plataforma', 'tarifas');
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          aplicarTarifas(snap.data() as Partial<ConfiguracionTarifas>);
+        }
+      },
+      () => {
+        // Fallback silencioso a valores por defecto
+      },
+    );
+    return () => unsub();
+  }, [aplicarTarifas]);
+
+  const rutasHVCA = useMemo(() => {
+    return RUTAS_BASE_HVCA.map((r) => {
+      const calculada = Math.max(
+        tarifas.tarifa_minima,
+        tarifas.tarifa_base + r.distanciaKm * tarifas.precio_por_km,
+      );
+      const minimaSugerida = Math.round(calculada * 2) / 2;
+      const maximaSugerida = Math.round((minimaSugerida + 1.5) * 2) / 2;
+      return {
+        origen: r.origen,
+        destino: r.destino,
+        distancia: `${r.distanciaKm.toFixed(1)} km`,
+        estimado: `S/ ${minimaSugerida.toFixed(2)} - ${maximaSugerida.toFixed(2)}`,
+      };
+    });
+  }, [tarifas]);
+
+  const apkUrlPasajero = process.env.NEXT_PUBLIC_APK_PASAJERO_URL || '';
+  const apkUrlConductor = process.env.NEXT_PUBLIC_APK_CONDUCTOR_URL || '';
 
   const faqs = [
     {
@@ -415,7 +497,7 @@ export default function HomePage() {
 
                   <div className="flex flex-wrap items-center gap-4">
                     <button
-                      onClick={() => alert('Próximamente disponible en Google Play Store y en descarga directa APK.')}
+                      onClick={() => setModalDescarga('pasajero')}
                       className="flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 px-6 py-3 text-xs sm:text-sm font-bold text-white shadow-lg shadow-emerald-500/25 transition-all"
                     >
                       <Download className="h-4 w-4" />
@@ -484,7 +566,7 @@ export default function HomePage() {
 
                   <div className="flex flex-wrap items-center gap-4">
                     <button
-                      onClick={() => alert('Próximamente disponible en Google Play Store y en descarga directa APK.')}
+                      onClick={() => setModalDescarga('conductor')}
                       className="flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 px-6 py-3 text-xs sm:text-sm font-bold text-white shadow-lg shadow-teal-500/25 transition-all"
                     >
                       <Download className="h-4 w-4" />
@@ -584,8 +666,13 @@ export default function HomePage() {
                 Ruta: {rutasHVCA[selectedRoute].origen} a {rutasHVCA[selectedRoute].destino} ({rutasHVCA[selectedRoute].distancia})
               </p>
 
-              <div className="rounded-xl bg-gray-900/80 p-3.5 text-[11px] text-gray-300 border border-gray-800 text-left">
-                💡 <strong>Recuerda:</strong> Como pasajero puedes ofrecer S/ 4.50, S/ 5.00 o el monto que consideres justo. Los choferes aceptarán o harán una oferta libremente.
+              <div className="rounded-xl bg-gray-900/80 p-3.5 text-[11px] text-gray-300 border border-gray-800 text-left space-y-1.5">
+                <p>
+                  💡 <strong>Recuerda:</strong> Tarifa base S/ {tarifas.tarifa_base.toFixed(2)} + S/ {tarifas.precio_por_km.toFixed(2)}/km (mínimo S/ {tarifas.tarifa_minima.toFixed(2)}). Los choferes aceptarán o harán una oferta libremente.
+                </p>
+                <p className="text-[10px] text-emerald-400 font-semibold">
+                  ● Tarifas sincronizadas en tiempo real con la plataforma
+                </p>
               </div>
             </div>
           </div>
@@ -762,6 +849,95 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+
+      {/* ===================== MODAL DESCARGA APK ===================== */}
+      {modalDescarga && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl bg-[#0F1424] border border-gray-700 p-6 shadow-2xl text-gray-100">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  {modalDescarga === 'pasajero' ? (
+                    <Smartphone className="h-5 w-5" />
+                  ) : (
+                    <Car className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    {modalDescarga === 'pasajero'
+                      ? 'Taxi HVCA Pasajero'
+                      : 'Taxi HVCA Conductor'}
+                  </h3>
+                  <p className="text-[11px] text-gray-400">
+                    Versión 1.0.0 · Android 7.0 o superior
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setModalDescarga(null)}
+                className="rounded-lg p-1.5 text-gray-400 hover:text-white hover:bg-gray-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs text-gray-300">
+              <div className="rounded-2xl bg-gray-900/80 border border-gray-800 p-4 space-y-2">
+                <p className="font-semibold text-white">
+                  Pasos para instalar y comenzar:
+                </p>
+                <ol className="list-decimal list-inside space-y-1.5 text-gray-400">
+                  <li>Descarga el instalador oficial APK en tu teléfono Android.</li>
+                  <li>
+                    Si tu dispositivo lo solicita, habilita{' '}
+                    <span className="text-gray-200">Orígenes desconocidos</span> para tu navegador.
+                  </li>
+                  <li>
+                    Inicia sesión con Google o correo y verifica tu celular mediante{' '}
+                    <span className="text-emerald-400 font-semibold">código SMS OTP</span>.
+                  </li>
+                  {modalDescarga === 'conductor' && (
+                    <li>
+                      Completa tu vehículo, DNI, Licencia y SOAT en la pestaña{' '}
+                      <span className="text-emerald-400 font-semibold">Mi Perfil</span>.
+                    </li>
+                  )}
+                </ol>
+              </div>
+
+              {(modalDescarga === 'pasajero' ? apkUrlPasajero : apkUrlConductor) ? (
+                <a
+                  href={modalDescarga === 'pasajero' ? apkUrlPasajero : apkUrlConductor}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-500/25 transition-all"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Descargar APK Oficial</span>
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              ) : (
+                <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/30 p-3.5 text-center space-y-1">
+                  <p className="font-bold text-emerald-300">
+                    Distribución Directa & Google Play Store
+                  </p>
+                  <p className="text-[11px] text-gray-300">
+                    La compilación pública se habilitará en breve mediante enlace APK directo y Google Play.
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={() => setModalDescarga(null)}
+                className="w-full rounded-xl bg-gray-900 hover:bg-gray-800 border border-gray-800 py-2.5 text-xs font-semibold text-gray-300"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

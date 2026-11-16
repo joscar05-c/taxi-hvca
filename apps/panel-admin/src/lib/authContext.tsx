@@ -8,7 +8,7 @@ import {
   signOut as fbSignOut,
   type User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 
 import { auth, db, googleProvider } from './firebase';
 import type { Profile } from './types';
@@ -36,7 +36,8 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 function obtenerListaAdminsPermitidos(): string[] {
-  const envAdmins = process.env.NEXT_PUBLIC_ADMIN_EMAILS || '';
+  const envAdmins =
+    process.env.NEXT_PUBLIC_ADMIN_EMAILS || 'locomancocapac@gmail.com';
   return envAdmins
     .split(',')
     .map((e) => e.trim().toLowerCase())
@@ -50,7 +51,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+    let activo = true;
+    let unsubPerfil: (() => void) | null = null;
+    let cleanupFocusListeners: (() => void) | null = null;
+
+    function limpiarSuscripcionesUsuario() {
+      if (unsubPerfil) {
+        unsubPerfil();
+        unsubPerfil = null;
+      }
+      if (cleanupFocusListeners) {
+        cleanupFocusListeners();
+        cleanupFocusListeners = null;
+      }
+    }
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (!activo) return;
+      limpiarSuscripcionesUsuario();
       setLoading(true);
       setError(null);
 
@@ -65,38 +83,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const tokenResult = await fbUser.getIdTokenResult();
+        if (!activo) return;
         const tieneClaimAdmin = tokenResult.claims.admin === true;
         const docRef = doc(db, 'perfiles', fbUser.uid);
-        const snap = await getDoc(docRef);
+        let bootstrapEnCurso = false;
 
-        if (snap.exists()) {
-          const perfilData = snap.data() as Profile;
-          // Verificación estricta: debe tener rol de admin en la base de datos o Custom Claim admin
-          if (perfilData.rol === 'admin' || tieneClaimAdmin) {
-            setUser(fbUser);
-            setProfile({ ...perfilData, id: snap.id, rol: 'admin' });
-          } else {
-            // Usuario existe pero es pasajero o conductor: Bloqueo inmediato
-            await fbSignOut(auth);
-            setUser(null);
-            setProfile(null);
-            setError(
-              `Acceso denegado: La cuenta ${fbUser.email} tiene rol de ${perfilData.rol} y no tiene permisos de administrador.`,
-            );
+        const procesarSnapshot = async (
+          snapData: Profile | null,
+          docId: string,
+        ) => {
+          if (!activo) return;
+
+          if (snapData) {
+            if (snapData.rol === 'admin' || tieneClaimAdmin) {
+              setUser(fbUser);
+              setProfile({ ...snapData, id: docId, rol: 'admin' });
+              setLoading(false);
+            } else {
+              limpiarSuscripcionesUsuario();
+              await fbSignOut(auth);
+              if (!activo) return;
+              setUser(null);
+              setProfile(null);
+              setError(
+                `Acceso denegado: La cuenta ${fbUser.email} tiene rol de ${snapData.rol} y no tiene permisos de administrador.`,
+              );
+              setLoading(false);
+            }
+            return;
           }
-        } else {
-          // El perfil no existe aún en Firestore. Solo se permite inicializar perfil admin
-          // si posee el Custom Claim `admin` o coincide con el bootstrap admin validado por Firestore Rules.
+
+          if (bootstrapEnCurso) return;
           const adminsPermitidos = obtenerListaAdminsPermitidos();
           const esAdminAutorizado =
-            tieneClaimAdmin || (Boolean(emailUsuario) && adminsPermitidos.includes(emailUsuario));
+            tieneClaimAdmin ||
+            (Boolean(emailUsuario) && adminsPermitidos.includes(emailUsuario));
 
           if (esAdminAutorizado) {
+            bootstrapEnCurso = true;
             const ahora = new Date().toISOString();
             const nuevoAdmin: Profile = {
               id: fbUser.uid,
               rol: 'admin',
-              nombre: fbUser.displayName || emailUsuario.split('@')[0] || 'Administrador',
+              nombre:
+                fbUser.displayName || emailUsuario.split('@')[0] || 'Administrador',
               telefono: fbUser.phoneNumber || '',
               email: emailUsuario,
               calificacion_promedio: 5.0,
@@ -106,30 +136,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               updated_at: ahora,
             };
             await setDoc(docRef, nuevoAdmin);
+            if (!activo) return;
             setUser(fbUser);
             setProfile(nuevoAdmin);
+            setLoading(false);
           } else {
-            // Un extraño intentó entrar con su cuenta de Google o Email: Bloqueo inmediato
+            limpiarSuscripcionesUsuario();
             await fbSignOut(auth);
+            if (!activo) return;
             setUser(null);
             setProfile(null);
             setError(
               `Acceso denegado: El correo ${fbUser.email} no está autorizado como administrador de Taxi HVCA.`,
             );
+            setLoading(false);
           }
-        }
+        };
+
+        unsubPerfil = onSnapshot(
+          docRef,
+          (snap) => {
+            void procesarSnapshot(
+              snap.exists() ? (snap.data() as Profile) : null,
+              snap.id,
+            ).catch((err) => {
+              console.error('Error al procesar snapshot admin:', err);
+              setLoading(false);
+            });
+          },
+          async (err) => {
+            console.error('Error en suscripción de perfil admin:', err);
+            limpiarSuscripcionesUsuario();
+            await fbSignOut(auth);
+            if (!activo) return;
+            setUser(null);
+            setProfile(null);
+            setError('Error al verificar autorización de administrador.');
+            setLoading(false);
+          },
+        );
+
+        const refrescarSilencioso = () => {
+          if (!activo || document.visibilityState === 'hidden') return;
+          void getDoc(docRef)
+            .then((snap) =>
+              procesarSnapshot(
+                snap.exists() ? (snap.data() as Profile) : null,
+                snap.id,
+              ),
+            )
+            .catch(() => undefined);
+        };
+
+        window.addEventListener('focus', refrescarSilencioso);
+        document.addEventListener('visibilitychange', refrescarSilencioso);
+        cleanupFocusListeners = () => {
+          window.removeEventListener('focus', refrescarSilencioso);
+          document.removeEventListener('visibilitychange', refrescarSilencioso);
+        };
       } catch (err: any) {
         console.error('Error al verificar perfil de administrador:', err);
         await fbSignOut(auth);
+        if (!activo) return;
         setUser(null);
         setProfile(null);
         setError('Error al verificar autorización de administrador.');
-      } finally {
         setLoading(false);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      activo = false;
+      limpiarSuscripcionesUsuario();
+      unsubscribeAuth();
+    };
   }, []);
 
   async function signInWithEmail(email: string, pass: string) {

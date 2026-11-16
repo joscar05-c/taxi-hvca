@@ -1,26 +1,33 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   collection,
-  onSnapshot,
   doc,
+  getDocs,
+  onSnapshot,
   updateDoc,
 } from 'firebase/firestore';
 import {
-  Users,
-  Search,
-  Filter,
   Car,
-  Phone,
-  Star,
   Edit2,
+  Filter,
+  Phone,
   Save,
+  Search,
+  ShieldCheck,
+  Star,
+  Users,
   X,
 } from 'lucide-react';
 
 import { db } from '@/lib/firebase';
-import type { Profile, UserRole } from '@/lib/types';
+import type {
+  EstadoDocumentosConductor,
+  Profile,
+  UserRole,
+} from '@/lib/types';
+import { useRealtimeSync } from '@/lib/useRealtimeSync';
 import { AuthGuard } from '@/components/AuthGuard';
 import { Header } from '@/components/Header';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -36,31 +43,55 @@ export default function UsuariosPage() {
   const [usuarioEditar, setUsuarioEditar] = useState<Profile | null>(null);
   const [editNombre, setEditNombre] = useState('');
   const [editTelefono, setEditTelefono] = useState('');
+  const [editTelefonoVerificado, setEditTelefonoVerificado] = useState(false);
   const [editVehiculo, setEditVehiculo] = useState('');
   const [editRol, setEditRol] = useState<UserRole>('pasajero');
+  const [editDni, setEditDni] = useState('');
+  const [editLicencia, setEditLicencia] = useState('');
+  const [editSoat, setEditSoat] = useState('');
+  const [editEstadoDocs, setEditEstadoDocs] =
+    useState<EstadoDocumentosConductor>('pendiente');
   const [guardando, setGuardando] = useState(false);
+
+  const aplicarPerfiles = useCallback((docs: Profile[]) => {
+    setUsuarios(docs);
+    setUsuarioEditar((actual) => {
+      if (!actual) return null;
+      return docs.find((d) => d.id === actual.id) ?? actual;
+    });
+    setCargando(false);
+  }, []);
+
+  const refrescarSilencioso = useCallback(async () => {
+    const snap = await getDocs(collection(db, 'perfiles'));
+    const docs: Profile[] = [];
+    snap.forEach((d) => docs.push({ id: d.id, ...d.data() } as Profile));
+    aplicarPerfiles(docs);
+  }, [aplicarPerfiles]);
+
+  useRealtimeSync(refrescarSilencioso);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'perfiles'), (snap) => {
       const docs: Profile[] = [];
       snap.forEach((d) => docs.push({ id: d.id, ...d.data() } as Profile));
-      setUsuarios(docs);
-      setUsuarioEditar((actual) => {
-        if (!actual) return null;
-        return docs.find((d) => d.id === actual.id) ?? actual;
-      });
-      setCargando(false);
+      aplicarPerfiles(docs);
     });
 
     return () => unsub();
-  }, []);
+  }, [aplicarPerfiles]);
 
   function abrirEdicion(u: Profile) {
     setUsuarioEditar(u);
     setEditNombre(u.nombre);
     setEditTelefono(u.telefono);
+    setEditTelefonoVerificado(Boolean(u.telefono_verificado));
     setEditVehiculo(u.vehiculo || '');
     setEditRol(u.rol);
+    setEditDni(u.dni_conductor || '');
+    setEditLicencia(u.licencia_conductor || '');
+    setEditSoat(u.soat_conductor || '');
+    setEditEstadoDocs(u.estado_documentos || 'pendiente');
   }
 
   async function guardarEdicion(e: React.FormEvent) {
@@ -68,13 +99,23 @@ export default function UsuariosPage() {
     if (!usuarioEditar) return;
     setGuardando(true);
     try {
-      await updateDoc(doc(db, 'perfiles', usuarioEditar.id), {
+      const payload: Record<string, unknown> = {
         nombre: editNombre.trim(),
         telefono: editTelefono.trim(),
+        telefono_verificado: editTelefonoVerificado,
         vehiculo: editVehiculo.trim() || null,
         rol: editRol,
         updated_at: new Date().toISOString(),
-      });
+      };
+
+      if (editRol === 'conductor') {
+        payload.dni_conductor = editDni.trim() || null;
+        payload.licencia_conductor = editLicencia.trim() || null;
+        payload.soat_conductor = editSoat.trim() || null;
+        payload.estado_documentos = editEstadoDocs;
+      }
+
+      await updateDoc(doc(db, 'perfiles', usuarioEditar.id), payload);
       setUsuarioEditar(null);
     } catch (err: any) {
       alert('Error al actualizar usuario: ' + err.message);
@@ -95,11 +136,14 @@ export default function UsuariosPage() {
   }
 
   const usuariosFiltrados = usuarios.filter((u) => {
+    const term = busqueda.trim().toLowerCase();
     const matchBusqueda =
-      u.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-      u.telefono.includes(busqueda) ||
-      (u.vehiculo && u.vehiculo.toLowerCase().includes(busqueda.toLowerCase())) ||
-      u.id.includes(busqueda);
+      !term ||
+      u.nombre.toLowerCase().includes(term) ||
+      u.telefono.includes(term) ||
+      (u.vehiculo && u.vehiculo.toLowerCase().includes(term)) ||
+      (u.dni_conductor && u.dni_conductor.includes(term)) ||
+      u.id.toLowerCase().includes(term);
 
     const matchRol = filtroRol === 'todos' || u.rol === filtroRol;
     const matchConexion =
@@ -125,7 +169,7 @@ export default function UsuariosPage() {
             type="text"
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar por nombre, teléfono, auto o ID..."
+            placeholder="Buscar por nombre, teléfono, DNI, auto o ID..."
             className="w-full rounded-xl bg-gray-900/80 border border-gray-800 pl-10 pr-4 py-2 text-xs text-white placeholder-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
         </div>
@@ -183,7 +227,7 @@ export default function UsuariosPage() {
                   <th className="py-3.5 pl-4">Usuario</th>
                   <th className="py-3.5">Rol</th>
                   <th className="py-3.5">Contacto</th>
-                  <th className="py-3.5">Vehículo</th>
+                  <th className="py-3.5">Vehículo / KYC</th>
                   <th className="py-3.5">Calificación</th>
                   <th className="py-3.5">Conexión</th>
                   <th className="py-3.5 text-right pr-4">Acciones</th>
@@ -217,6 +261,11 @@ export default function UsuariosPage() {
                       <div className="flex items-center gap-1.5">
                         <Phone className="h-3.5 w-3.5 text-gray-400" />
                         <span>{u.telefono || 'Sin teléfono'}</span>
+                        {u.telefono_verificado ? (
+                          <span title="Teléfono verificado">
+                            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                          </span>
+                        ) : null}
                       </div>
                     </td>
 
@@ -229,7 +278,10 @@ export default function UsuariosPage() {
                           </div>
                           {u.rol === 'conductor' && u.dni_conductor ? (
                             <p className="text-[10px] text-gray-400 mt-0.5">
-                              DNI: {u.dni_conductor} · Lic: {u.licencia_conductor || '—'} · SOAT: {u.soat_conductor || '—'}
+                              DNI: {u.dni_conductor} · Lic: {u.licencia_conductor || '—'} ·{' '}
+                              <span className="text-emerald-400 uppercase font-semibold">
+                                {u.estado_documentos || 'pendiente'}
+                              </span>
                             </p>
                           ) : null}
                         </div>
@@ -274,13 +326,16 @@ export default function UsuariosPage() {
 
       {/* Modal de Edición Rápida */}
       {usuarioEditar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-panel w-full max-w-lg rounded-3xl p-6 shadow-2xl border border-gray-700">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="glass-panel w-full max-w-lg rounded-3xl p-6 shadow-2xl border border-gray-700 my-auto">
             <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Edit2 className="h-5 w-5 text-emerald-400" />
-                Editar Perfil de Usuario
-              </h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Edit2 className="h-5 w-5 text-emerald-400" />
+                  Editar Perfil de Usuario
+                </h3>
+                <StatusBadge isOnline={usuarioEditar.esta_conectado} />
+              </div>
               <button
                 onClick={() => setUsuarioEditar(null)}
                 className="rounded-lg p-1.5 text-gray-400 hover:text-white hover:bg-gray-800"
@@ -289,7 +344,7 @@ export default function UsuariosPage() {
               </button>
             </div>
 
-            <form onSubmit={guardarEdicion} className="mt-4 space-y-4">
+            <form onSubmit={(e) => void guardarEdicion(e)} className="mt-4 space-y-4">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
                   Nombre Completo
@@ -303,16 +358,28 @@ export default function UsuariosPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
-                  Teléfono
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                    Teléfono
+                  </label>
+                  <input
+                    type="text"
+                    value={editTelefono}
+                    onChange={(e) => setEditTelefono(e.target.value)}
+                    className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <label className="flex items-center gap-2.5 rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2.5 text-xs font-medium text-gray-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editTelefonoVerificado}
+                    onChange={(e) => setEditTelefonoVerificado(e.target.checked)}
+                    className="h-4 w-4 accent-emerald-500 rounded"
+                  />
+                  <span>Teléfono Verificado</span>
                 </label>
-                <input
-                  type="text"
-                  value={editTelefono}
-                  onChange={(e) => setEditTelefono(e.target.value)}
-                  className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-                />
               </div>
 
               <div>
@@ -331,9 +398,13 @@ export default function UsuariosPage() {
               </div>
 
               {editRol === 'conductor' && (
-                <div className="space-y-3">
+                <div className="space-y-3 rounded-2xl bg-gray-900/60 border border-gray-800 p-4">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
+                    Vehículo y Documentación KYC
+                  </p>
+
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
                       Vehículo (Modelo / Placa / Color)
                     </label>
                     <input
@@ -341,28 +412,68 @@ export default function UsuariosPage() {
                       value={editVehiculo}
                       onChange={(e) => setEditVehiculo(e.target.value)}
                       placeholder="Toyota Yaris Blanco - ABC-123"
-                      className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                      className="w-full rounded-xl bg-gray-950 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
                     />
                   </div>
 
-                  {usuarioEditar.dni_conductor ||
-                  usuarioEditar.licencia_conductor ||
-                  usuarioEditar.soat_conductor ? (
-                    <div className="rounded-xl bg-gray-900/70 border border-gray-800 p-3 text-xs space-y-1">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                        Documentación KYC ({usuarioEditar.estado_documentos || 'registrada'})
-                      </p>
-                      <p className="text-gray-300">
-                        DNI: <span className="font-mono text-white">{usuarioEditar.dni_conductor || '—'}</span>
-                      </p>
-                      <p className="text-gray-300">
-                        Licencia: <span className="font-mono text-white">{usuarioEditar.licencia_conductor || '—'}</span>
-                      </p>
-                      <p className="text-gray-300">
-                        SOAT: <span className="font-mono text-white">{usuarioEditar.soat_conductor || '—'}</span>
-                      </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                        DNI Conductor
+                      </label>
+                      <input
+                        type="text"
+                        value={editDni}
+                        onChange={(e) => setEditDni(e.target.value)}
+                        placeholder="12345678"
+                        className="w-full rounded-xl bg-gray-950 border border-gray-800 px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                      />
                     </div>
-                  ) : null}
+                    <div>
+                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                        Licencia (Brevete)
+                      </label>
+                      <input
+                        type="text"
+                        value={editLicencia}
+                        onChange={(e) => setEditLicencia(e.target.value)}
+                        placeholder="Q12345678"
+                        className="w-full rounded-xl bg-gray-950 border border-gray-800 px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                        Póliza SOAT
+                      </label>
+                      <input
+                        type="text"
+                        value={editSoat}
+                        onChange={(e) => setEditSoat(e.target.value)}
+                        placeholder="SOAT-2026-001"
+                        className="w-full rounded-xl bg-gray-950 border border-gray-800 px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                        Estado Documentos
+                      </label>
+                      <select
+                        value={editEstadoDocs}
+                        onChange={(e) =>
+                          setEditEstadoDocs(e.target.value as EstadoDocumentosConductor)
+                        }
+                        className="w-full rounded-xl bg-gray-950 border border-gray-800 px-3.5 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+                      >
+                        <option value="pendiente">Pendiente</option>
+                        <option value="en_revision">En Revisión</option>
+                        <option value="aprobado">Aprobado</option>
+                        <option value="rechazado">Rechazado</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               )}
 

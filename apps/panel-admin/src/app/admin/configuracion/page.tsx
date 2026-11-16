@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import {
   AlertCircle,
   CheckCircle,
@@ -15,6 +15,7 @@ import { Header } from '@/components/Header';
 import { useAuth } from '@/lib/authContext';
 import { db } from '@/lib/firebase';
 import type { ConfiguracionTarifas } from '@/lib/types';
+import { useRealtimeSync } from '@/lib/useRealtimeSync';
 
 const COLECCION_CONFIGURACION = 'configuracion_plataforma';
 const DOC_TARIFAS = 'tarifas';
@@ -31,6 +32,36 @@ export default function ConfiguracionPage() {
   const [guardando, setGuardando] = useState(false);
   const [guardado, setGuardado] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const guardandoRef = useRef(false);
+
+  const aplicarConfig = useCallback((data: Partial<ConfiguracionTarifas>) => {
+    if (guardandoRef.current) return;
+    if (typeof data.tarifa_base === 'number') {
+      setTarifaBase(data.tarifa_base.toFixed(2));
+    }
+    if (typeof data.precio_por_km === 'number') {
+      setPrecioKm(data.precio_por_km.toFixed(2));
+    }
+    if (typeof data.tarifa_minima === 'number') {
+      setTarifaMinima(data.tarifa_minima.toFixed(2));
+    }
+    if (typeof data.comision_porcentaje === 'number') {
+      setComision(String(data.comision_porcentaje));
+    }
+    setUltimaActualizacion(data.updated_at ?? null);
+    setActualizadoPor(data.updated_by ?? null);
+  }, []);
+
+  const refrescarSilencioso = useCallback(async () => {
+    if (guardandoRef.current) return;
+    const snap = await getDoc(doc(db, COLECCION_CONFIGURACION, DOC_TARIFAS));
+    if (snap.exists()) {
+      aplicarConfig(snap.data() as Partial<ConfiguracionTarifas>);
+    }
+    setCargando(false);
+  }, [aplicarConfig]);
+
+  useRealtimeSync(refrescarSilencioso);
 
   useEffect(() => {
     const ref = doc(db, COLECCION_CONFIGURACION, DOC_TARIFAS);
@@ -38,21 +69,7 @@ export default function ConfiguracionPage() {
       ref,
       (snap) => {
         if (snap.exists()) {
-          const data = snap.data() as Partial<ConfiguracionTarifas>;
-          if (typeof data.tarifa_base === 'number') {
-            setTarifaBase(data.tarifa_base.toFixed(2));
-          }
-          if (typeof data.precio_por_km === 'number') {
-            setPrecioKm(data.precio_por_km.toFixed(2));
-          }
-          if (typeof data.tarifa_minima === 'number') {
-            setTarifaMinima(data.tarifa_minima.toFixed(2));
-          }
-          if (typeof data.comision_porcentaje === 'number') {
-            setComision(String(data.comision_porcentaje));
-          }
-          setUltimaActualizacion(data.updated_at ?? null);
-          setActualizadoPor(data.updated_by ?? null);
+          aplicarConfig(snap.data() as Partial<ConfiguracionTarifas>);
         }
         setCargando(false);
       },
@@ -64,7 +81,7 @@ export default function ConfiguracionPage() {
     );
 
     return () => unsub();
-  }, []);
+  }, [aplicarConfig]);
 
   async function handleGuardar(e: React.FormEvent) {
     e.preventDefault();
@@ -94,6 +111,7 @@ export default function ConfiguracionPage() {
     }
 
     setGuardando(true);
+    guardandoRef.current = true;
     try {
       const payload: ConfiguracionTarifas = {
         tarifa_base: Math.round(numBase * 100) / 100,
@@ -110,6 +128,7 @@ export default function ConfiguracionPage() {
     } catch (err: any) {
       setError(err?.message || 'Error al guardar los parámetros en Firestore.');
     } finally {
+      guardandoRef.current = false;
       setGuardando(false);
     }
   }
@@ -143,7 +162,7 @@ export default function ConfiguracionPage() {
             </div>
           )}
 
-          <form onSubmit={handleGuardar} className="space-y-4">
+          <form onSubmit={(e) => void handleGuardar(e)} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">
                 Tarifa Base de Arranque (S/)
@@ -207,7 +226,7 @@ export default function ConfiguracionPage() {
 
             {ultimaActualizacion && (
               <p className="text-[11px] text-gray-500">
-                Última actualización: {new Date(ultimaActualizacion).toLocaleString()}{' '}
+                Última actualización: {new Date(ultimaActualizacion).toLocaleString('es-PE')}{' '}
                 {actualizadoPor ? `por ${actualizadoPor}` : ''}
               </p>
             )}

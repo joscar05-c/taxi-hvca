@@ -1,30 +1,29 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   collection,
-  onSnapshot,
-  query,
-  orderBy,
-  limit,
-  updateDoc,
   doc,
+  getDocs,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  updateDoc,
 } from 'firebase/firestore';
 import {
-  Car,
-  Users,
-  CheckCircle2,
-  Clock,
-  TrendingUp,
-  MapPin,
-  ExternalLink,
-  Ban,
   Activity,
+  Ban,
+  Car,
+  CheckCircle2,
+  ExternalLink,
+  Users,
 } from 'lucide-react';
 
 import { db } from '@/lib/firebase';
 import type { Profile, SolicitudViaje } from '@/lib/types';
+import { useRealtimeSync } from '@/lib/useRealtimeSync';
 import { AuthGuard } from '@/components/AuthGuard';
 import { Header } from '@/components/Header';
 import { StatCard } from '@/components/StatCard';
@@ -35,15 +34,40 @@ export default function DashboardAdminPage() {
   const [solicitudes, setSolicitudes] = useState<SolicitudViaje[]>([]);
   const [cargando, setCargando] = useState(true);
 
+  const refrescarSilencioso = useCallback(async () => {
+    const qViajes = query(
+      collection(db, 'solicitudes_viaje'),
+      orderBy('created_at', 'desc'),
+      limit(25),
+    );
+    const [snapPerfiles, snapViajes] = await Promise.all([
+      getDocs(collection(db, 'perfiles')),
+      getDocs(qViajes),
+    ]);
+
+    const perfilesDocs: Profile[] = [];
+    snapPerfiles.forEach((d) =>
+      perfilesDocs.push({ id: d.id, ...d.data() } as Profile),
+    );
+    setUsuarios(perfilesDocs);
+
+    const viajesDocs: SolicitudViaje[] = [];
+    snapViajes.forEach((d) =>
+      viajesDocs.push({ id: d.id, ...d.data() } as SolicitudViaje),
+    );
+    setSolicitudes(viajesDocs);
+    setCargando(false);
+  }, []);
+
+  useRealtimeSync(refrescarSilencioso);
+
   useEffect(() => {
-    // 1. Escucha en tiempo real de todos los perfiles
     const unsubPerfiles = onSnapshot(collection(db, 'perfiles'), (snap) => {
       const docs: Profile[] = [];
       snap.forEach((d) => docs.push({ id: d.id, ...d.data() } as Profile));
       setUsuarios(docs);
     });
 
-    // 2. Escucha en tiempo real de solicitudes de viaje
     const qViajes = query(
       collection(db, 'solicitudes_viaje'),
       orderBy('created_at', 'desc'),
@@ -62,6 +86,14 @@ export default function DashboardAdminPage() {
       unsubViajes();
     };
   }, []);
+
+  const usuariosMap = useMemo(() => {
+    const map: Record<string, Profile> = {};
+    for (const u of usuarios) {
+      map[u.id] = u;
+    }
+    return map;
+  }, [usuarios]);
 
   // Métricas calculadas en tiempo real
   const totalConductores = usuarios.filter((u) => u.rol === 'conductor').length;
@@ -197,53 +229,62 @@ export default function DashboardAdminPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800/60">
-                  {solicitudes.slice(0, 8).map((sol) => (
-                    <tr
-                      key={sol.id}
-                      className="hover:bg-gray-800/40 transition-colors duration-150"
-                    >
-                      <td className="py-3.5 pl-2">
-                        <StatusBadge status={sol.estado} />
-                      </td>
-                      <td className="py-3.5">
-                        <div className="font-medium text-gray-200">
-                          Pasajero: {sol.pasajero_id.slice(0, 8)}...
-                        </div>
-                        <div className="text-[11px] text-gray-400">
-                          {sol.conductor_id
-                            ? `Conductor: ${sol.conductor_id.slice(0, 8)}...`
-                            : 'Sin conductor aún'}
-                        </div>
-                      </td>
-                      <td className="py-3.5">
-                        <span className="font-bold text-white text-sm">
-                          S/ {(sol.precio_final ?? sol.precio_inicial).toFixed(2)}
-                        </span>
-                        {sol.precio_final && sol.precio_final !== sol.precio_inicial && (
-                          <span className="ml-1 text-[10px] text-gray-400 line-through">
-                            S/ {sol.precio_inicial.toFixed(2)}
+                  {solicitudes.slice(0, 8).map((sol) => {
+                    const pasajero = usuariosMap[sol.pasajero_id];
+                    const conductor = sol.conductor_id
+                      ? usuariosMap[sol.conductor_id]
+                      : undefined;
+
+                    return (
+                      <tr
+                        key={sol.id}
+                        className="hover:bg-gray-800/40 transition-colors duration-150"
+                      >
+                        <td className="py-3.5 pl-2">
+                          <StatusBadge status={sol.estado} />
+                        </td>
+                        <td className="py-3.5">
+                          <div className="font-medium text-gray-200">
+                            {pasajero?.nombre ?? `Pasajero: ${sol.pasajero_id.slice(0, 8)}...`}
+                          </div>
+                          <div className="text-[11px] text-gray-400">
+                            {sol.conductor_id
+                              ? conductor?.nombre
+                                ? `Conductor: ${conductor.nombre}`
+                                : `Conductor: ${sol.conductor_id.slice(0, 8)}...`
+                              : 'Sin conductor aún'}
+                          </div>
+                        </td>
+                        <td className="py-3.5">
+                          <span className="font-bold text-white text-sm">
+                            S/ {(sol.precio_final ?? sol.precio_inicial).toFixed(2)}
                           </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 text-gray-400">
-                        {new Date(sol.created_at).toLocaleTimeString('es-PE', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </td>
-                      <td className="py-3.5 text-right pr-2">
-                        {sol.estado !== 'completado' && sol.estado !== 'cancelada' && (
-                          <button
-                            onClick={() => void cancelarViaje(sol.id)}
-                            title="Cancelar Viaje"
-                            className="rounded-lg p-1.5 text-gray-400 hover:bg-rose-500/20 hover:text-rose-400 transition-colors"
-                          >
-                            <Ban className="h-4 w-4" />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                          {sol.precio_final && sol.precio_final !== sol.precio_inicial && (
+                            <span className="ml-1 text-[10px] text-gray-400 line-through">
+                              S/ {sol.precio_inicial.toFixed(2)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 text-gray-400">
+                          {new Date(sol.created_at).toLocaleTimeString('es-PE', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                        <td className="py-3.5 text-right pr-2">
+                          {sol.estado !== 'completado' && sol.estado !== 'cancelada' && (
+                            <button
+                              onClick={() => void cancelarViaje(sol.id)}
+                              title="Cancelar Viaje"
+                              className="rounded-lg p-1.5 text-gray-400 hover:bg-rose-500/20 hover:text-rose-400 transition-colors"
+                            >
+                              <Ban className="h-4 w-4" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
