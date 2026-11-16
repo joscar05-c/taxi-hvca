@@ -10,6 +10,7 @@ import {
 import {
   doc,
   getDoc,
+  onSnapshot,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
@@ -170,9 +171,12 @@ export const authRepository = {
       email: datos.email ?? null,
       foto_url: datos.foto_url ?? null,
       calificacion_promedio: 5.0,
+      total_calificaciones: 1,
       estado: 'disponible',
       esta_conectado: false,
       ubicacion_actual: null,
+      ubicacion_lat: null,
+      ubicacion_lng: null,
       vehiculo: datos.vehiculo ?? null,
       created_at: ahora,
       updated_at: ahora,
@@ -361,6 +365,56 @@ export const authRepository = {
     return actualizado;
   },
 
+  /**
+   * Se suscribe en tiempo real a los cambios de un perfil en Firestore.
+   */
+  suscribirPerfil(
+    usuarioId: string,
+    callback: (perfil: Profile | null) => void,
+    onError?: (error: Error) => void,
+  ): () => void {
+    const docRef = doc(db, COLECCION_PERFILES, usuarioId);
+    return onSnapshot(
+      docRef,
+      (snap) => {
+        if (!snap.exists()) {
+          callback(null);
+          return;
+        }
+        callback({ id: snap.id, ...snap.data() } as Profile);
+      },
+      (error) => {
+        console.warn('[authRepository] Error en suscribirPerfil:', error);
+        onError?.(error);
+      },
+    );
+  },
+
+  async actualizarDocumentosConductor(datos: {
+    vehiculo: string;
+    dni_conductor: string;
+    licencia_conductor: string;
+    soat_conductor: string;
+  }): Promise<Profile> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Sesión no iniciada.');
+
+    const docRef = doc(db, COLECCION_PERFILES, user.uid);
+    const ahora = new Date().toISOString();
+    await updateDoc(docRef, {
+      vehiculo: datos.vehiculo.trim(),
+      dni_conductor: datos.dni_conductor.trim(),
+      licencia_conductor: datos.licencia_conductor.trim(),
+      soat_conductor: datos.soat_conductor.trim(),
+      estado_documentos: 'aprobado',
+      updated_at: ahora,
+    });
+
+    const actualizado = await this.obtenerPerfil(user.uid);
+    if (!actualizado) throw new Error('No se encontró el perfil.');
+    return actualizado;
+  },
+
   async actualizarUbicacion(latitud: number, longitud: number): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('Sesión no iniciada.');
@@ -368,6 +422,8 @@ export const authRepository = {
     const docRef = doc(db, COLECCION_PERFILES, user.uid);
     const ahora = new Date().toISOString();
     await updateDoc(docRef, {
+      ubicacion_lat: latitud,
+      ubicacion_lng: longitud,
       ubicacion_actual: `SRID=4326;POINT(${longitud} ${latitud})`,
       updated_at: ahora,
     });

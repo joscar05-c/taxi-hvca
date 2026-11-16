@@ -3,17 +3,22 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
+  setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 
 import {
   TARIFAS_POR_DEFECTO,
+  type CalificacionViaje,
   type ConfiguracionTarifas,
   type Coordenadas,
   type OfertaConductor,
+  type Profile,
   type SolicitudEnProgreso,
   type SolicitudEstado,
   type SolicitudViaje,
@@ -22,6 +27,8 @@ import { db } from './firebaseClient';
 
 const COLECCION_SOLICITUDES = 'solicitudes_viaje';
 const COLECCION_OFERTAS = 'ofertas_conductores';
+const COLECCION_PERFILES = 'perfiles';
+const COLECCION_CALIFICACIONES = 'calificaciones_viaje';
 const COLECCION_CONFIGURACION = 'configuracion_plataforma';
 const DOC_TARIFAS = 'tarifas';
 
@@ -120,6 +127,11 @@ export const viajesRepository = {
     origen: Coordenadas,
     destino: Coordenadas,
     precioInicial: number,
+    extras?: {
+      origen_direccion?: string;
+      destino_direccion?: string;
+      distancia_km?: number;
+    },
   ): Promise<SolicitudViaje> {
     if (!Number.isFinite(precioInicial) || precioInicial <= 0) {
       throw new Error('El precio inicial debe ser un monto válido mayor a 0.');
@@ -132,6 +144,10 @@ export const viajesRepository = {
       origen_lng: origen.longitude,
       destino_lat: destino.latitude,
       destino_lng: destino.longitude,
+      origen_direccion: extras?.origen_direccion ?? null,
+      destino_direccion: extras?.destino_direccion ?? null,
+      distancia_km:
+        typeof extras?.distancia_km === 'number' ? extras.distancia_km : null,
       precio_inicial: Math.round(precioInicial * 100) / 100,
       estado: 'buscando',
       conductor_id: null,
@@ -151,6 +167,12 @@ export const viajesRepository = {
     solicitudId: string,
     conductorId: string,
     precio: number,
+    metaConductor?: {
+      conductor_nombre?: string;
+      conductor_vehiculo?: string | null;
+      conductor_calificacion?: number;
+      conductor_telefono?: string;
+    },
   ): Promise<OfertaConductor> {
     if (!Number.isFinite(precio) || precio <= 0) {
       throw new Error('El precio de la oferta debe ser mayor a 0.');
@@ -181,6 +203,18 @@ export const viajesRepository = {
         solicitud_id: solicitudId,
         conductor_id: conductorId,
         precio: precioRedondeado,
+        ...(metaConductor?.conductor_nombre
+          ? { conductor_nombre: metaConductor.conductor_nombre }
+          : {}),
+        ...(metaConductor?.conductor_vehiculo !== undefined
+          ? { conductor_vehiculo: metaConductor.conductor_vehiculo }
+          : {}),
+        ...(typeof metaConductor?.conductor_calificacion === 'number'
+          ? { conductor_calificacion: metaConductor.conductor_calificacion }
+          : {}),
+        ...(metaConductor?.conductor_telefono
+          ? { conductor_telefono: metaConductor.conductor_telefono }
+          : {}),
         created_at: ahora,
       };
 
@@ -428,5 +462,160 @@ export const viajesRepository = {
     );
 
     return unsubscribe;
+  },
+
+  /**
+   * Recupera la solicitud/viaje activo más reciente del pasajero para restaurar
+   * su estado si cerró o recargó la aplicación.
+   */
+  async obtenerViajeActivoPasajero(
+    pasajeroId: string,
+  ): Promise<SolicitudViaje | null> {
+    const q = query(
+      collection(db, COLECCION_SOLICITUDES),
+      where('pasajero_id', '==', pasajeroId),
+    );
+    const snap = await getDocs(q);
+    const activos: SolicitudViaje[] = [];
+    snap.forEach((d) => {
+      const sol = { id: d.id, ...d.data() } as SolicitudViaje;
+      if (
+        sol.estado === 'buscando' ||
+        sol.estado === 'aceptado' ||
+        sol.estado === 'en_camino_origen' ||
+        sol.estado === 'en_curso'
+      ) {
+        activos.push(sol);
+      }
+    });
+    activos.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return activos[0] ?? null;
+  },
+
+  /**
+   * Recupera el viaje activo más reciente asignado al conductor.
+   */
+  async obtenerViajeActivoConductor(
+    conductorId: string,
+  ): Promise<SolicitudViaje | null> {
+    const q = query(
+      collection(db, COLECCION_SOLICITUDES),
+      where('conductor_id', '==', conductorId),
+    );
+    const snap = await getDocs(q);
+    const activos: SolicitudViaje[] = [];
+    snap.forEach((d) => {
+      const sol = { id: d.id, ...d.data() } as SolicitudViaje;
+      if (
+        sol.estado === 'aceptado' ||
+        sol.estado === 'en_camino_origen' ||
+        sol.estado === 'en_curso'
+      ) {
+        activos.push(sol);
+      }
+    });
+    activos.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return activos[0] ?? null;
+  },
+
+  /**
+   * Se suscribe en tiempo real al historial de viajes del usuario (ordenado del más reciente al más antiguo).
+   */
+  suscribirHistorialViajes(
+    usuarioId: string,
+    rol: 'pasajero' | 'conductor',
+    callback: (viajes: SolicitudViaje[]) => void,
+    onError?: (error: Error) => void,
+  ): () => void {
+    const campo = rol === 'pasajero' ? 'pasajero_id' : 'conductor_id';
+    const q = query(
+      collection(db, COLECCION_SOLICITUDES),
+      where(campo, '==', usuarioId),
+    );
+
+    return onSnapshot(
+      q,
+      (snap) => {
+        const lista: SolicitudViaje[] = [];
+        snap.forEach((d) => {
+          lista.push({ id: d.id, ...d.data() } as SolicitudViaje);
+        });
+        lista.sort((a, b) => b.created_at.localeCompare(a.created_at));
+        callback(lista);
+      },
+      (error) => {
+        console.warn('[viajesRepository] Error en suscribirHistorialViajes:', error);
+        onError?.(error);
+      },
+    );
+  },
+
+  /**
+   * Registra la calificación mutua de un viaje completado, actualiza el documento
+   * de solicitud y recalcula `calificacion_promedio` en el perfil evaluado.
+   */
+  async calificarViaje(params: {
+    solicitudId: string;
+    evaluadorId: string;
+    evaluadoId: string;
+    rolEvaluador: 'pasajero' | 'conductor';
+    estrellas: number;
+    comentario?: string;
+  }): Promise<void> {
+    const estrellasValidas = Math.max(1, Math.min(5, Math.round(params.estrellas)));
+    const ahora = new Date().toISOString();
+    const calificacionId = `${params.solicitudId}_${params.rolEvaluador}`;
+    const comentarioLimpio = params.comentario?.trim() || null;
+
+    const calificacionDoc: Omit<CalificacionViaje, 'id'> = {
+      solicitud_id: params.solicitudId,
+      evaluador_id: params.evaluadorId,
+      evaluado_id: params.evaluadoId,
+      rol_evaluador: params.rolEvaluador,
+      estrellas: estrellasValidas,
+      comentario: comentarioLimpio,
+      created_at: ahora,
+    };
+
+    await setDoc(
+      doc(db, COLECCION_CALIFICACIONES, calificacionId),
+      calificacionDoc,
+      { merge: true },
+    );
+
+    const campoSolicitud =
+      params.rolEvaluador === 'pasajero'
+        ? 'calificacion_conductor'
+        : 'calificacion_pasajero';
+
+    await updateDoc(doc(db, COLECCION_SOLICITUDES, params.solicitudId), {
+      [campoSolicitud]: estrellasValidas,
+      ...(comentarioLimpio ? { comentario_calificacion: comentarioLimpio } : {}),
+    });
+
+    const perfilRef = doc(db, COLECCION_PERFILES, params.evaluadoId);
+    const perfilSnap = await getDoc(perfilRef);
+    if (perfilSnap.exists()) {
+      const data = perfilSnap.data() as Profile;
+      const totalPrevio =
+        typeof data.total_calificaciones === 'number' && data.total_calificaciones > 0
+          ? data.total_calificaciones
+          : 1;
+      const promedioPrevio =
+        typeof data.calificacion_promedio === 'number'
+          ? data.calificacion_promedio
+          : 5.0;
+      const nuevoTotal = totalPrevio + 1;
+      const nuevoPromedio =
+        Math.round(
+          ((promedioPrevio * totalPrevio + estrellasValidas) / nuevoTotal) * 100,
+        ) / 100;
+
+      await updateDoc(perfilRef, {
+        calificacion_promedio: nuevoPromedio,
+        total_calificaciones: nuevoTotal,
+        updated_at: ahora,
+      });
+    }
   },
 };

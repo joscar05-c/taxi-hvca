@@ -39,8 +39,8 @@ service cloud.firestore {
     // 1. Perfiles de usuario (pasajeros, conductores y administradores)
     match /perfiles/{userId} {
       // Evitar raspado masivo (PII): solo administradores pueden listar todos los perfiles.
-      // Un usuario autenticado puede consultar su propio perfil o el de un conductor por ID.
-      allow get: if isOwner(userId) || isAdmin() || (isAuthenticated() && resource.data.rol == 'conductor');
+      // Un usuario autenticado puede consultar perfiles puntuales por ID (contraparte de viaje/oferta).
+      allow get: if isAuthenticated();
       allow list: if isAdmin();
 
       // Creación: los usuarios normales solo pueden registrarse como 'pasajero' o 'conductor',
@@ -56,8 +56,8 @@ service cloud.firestore {
         )
       );
 
-      // Actualización: impide escalada de privilegios (cambio de rol/id/calificación)
-      // y exige verificación real en verificaciones_telefono para marcar telefono_verificado = true.
+      // Actualización: impide escalada de privilegios (cambio de rol/id/calificación propia)
+      // o permite actualizar calificación promedio al evaluar un viaje.
       allow update: if isAdmin() || (
         isOwner(userId) &&
         request.resource.data.id == resource.data.id &&
@@ -73,6 +73,16 @@ service cloud.firestore {
           ) ||
           hasVerifiedPhone(userId, request.resource.data.telefono)
         )
+      ) || (
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'calificacion_promedio',
+          'total_calificaciones',
+          'updated_at'
+        ]) &&
+        request.resource.data.calificacion_promedio is number &&
+        request.resource.data.calificacion_promedio >= 1 &&
+        request.resource.data.calificacion_promedio <= 5
       );
 
       allow delete: if isAdmin();
@@ -85,7 +95,7 @@ service cloud.firestore {
         isAdmin() ||
         resource.data.pasajero_id == request.auth.uid ||
         resource.data.conductor_id == request.auth.uid ||
-        resource.data.estado in ['buscando', 'aceptado', 'cancelada']
+        resource.data.estado in ['buscando', 'aceptado', 'en_camino_origen', 'en_curso', 'completado', 'cancelada']
       );
 
       // Listado: los usuarios no pueden listar el historial privado de viajes de terceros.
@@ -135,6 +145,26 @@ service cloud.firestore {
               (resource.data.estado == 'aceptado' && request.resource.data.estado == 'en_camino_origen') ||
               (resource.data.estado == 'en_camino_origen' && request.resource.data.estado == 'en_curso') ||
               (resource.data.estado == 'en_curso' && request.resource.data.estado == 'completado')
+            )
+          ) ||
+          // D) Pasajero o conductor asignado registran calificación sobre un viaje completado
+          (
+            resource.data.estado == 'completado' &&
+            (
+              (
+                resource.data.pasajero_id == request.auth.uid &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'calificacion_conductor',
+                  'comentario_calificacion'
+                ])
+              ) ||
+              (
+                resource.data.conductor_id == request.auth.uid &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'calificacion_pasajero',
+                  'comentario_calificacion'
+                ])
+              )
             )
           )
         )
@@ -236,6 +266,19 @@ service cloud.firestore {
         request.resource.data.comision_porcentaje is number &&
         request.resource.data.comision_porcentaje >= 0 &&
         request.resource.data.comision_porcentaje <= 100;
+      allow delete: if isAdmin();
+    }
+
+    // 6. Calificaciones mutuas de viajes
+    match /calificaciones_viaje/{calificacionId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.evaluador_id == request.auth.uid &&
+        request.resource.data.estrellas is number &&
+        request.resource.data.estrellas >= 1 &&
+        request.resource.data.estrellas <= 5
+      );
       allow delete: if isAdmin();
     }
   }

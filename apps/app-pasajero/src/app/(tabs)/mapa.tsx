@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import MapView from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -20,8 +22,10 @@ import {
   calcularDistanciaHaversine,
   calcularTarifa,
   colores,
+  extraerCoordenadasPerfil,
+  formatearReferenciaHuancavelica,
   HUANCAVELICA_CENTRO,
-  PUNTOS_SIMULACION_HVCA,
+  obtenerDireccionLegible,
   useAuth,
   useForegroundLocation,
   viajesRepository,
@@ -52,37 +56,100 @@ function textoEstadoViaje(estado: SolicitudEstado): string {
   }
 }
 
+function normalizarTelefonoWhatsApp(telefono: string): string | null {
+  const digitos = telefono.replace(/\D/g, '');
+  if (!digitos) return null;
+  if (digitos.length === 9 && digitos.startsWith('9')) {
+    return `51${digitos}`;
+  }
+  return digitos;
+}
+
 export default function PantallaMapa() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { perfil, sesion, cerrarSesion } = useAuth();
   const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
     useForegroundLocation();
+
   const [centroMapa, setCentroMapa] = useState<Coordenadas | null>(null);
   const [originCoords, setOriginCoords] = useState<Coordenadas | null>(null);
   const [destinoCoords, setDestinoCoords] = useState<Coordenadas | null>(null);
+  const [origenDireccion, setOrigenDireccion] = useState<string | null>(null);
+  const [destinoDireccion, setDestinoDireccion] = useState<string | null>(null);
   const [tarifa, setTarifa] = useState('');
-  const [configTarifas, setConfigTarifas] =
+  const [configPlataforma, setConfigPlataforma] =
     useState<ConfiguracionTarifas>(TARIFAS_POR_DEFECTO);
+
   const [solicitud, setSolicitud] = useState<SolicitudViaje | null>(null);
   const [ofertas, setOfertas] = useState<OfertaConductor[]>([]);
+  const [perfilesOfertas, setPerfilesOfertas] = useState<Record<string, Profile>>({});
+  const fetchedConductoresRef = useRef<Set<string>>(new Set());
+
   const [viajeAceptado, setViajeAceptado] = useState<SolicitudViaje | null>(null);
   const [perfilConductor, setPerfilConductor] = useState<Profile | null>(null);
+  const [estrellasSeleccionadas, setEstrellasSeleccionadas] = useState<number>(5);
+  const [calificacionEnviada, setCalificacionEnviada] = useState(false);
+
   const [operando, setOperando] = useState(false);
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const enViaje = viajeAceptado !== null;
+  const userId = sesion?.user?.id;
 
   useEffect(() => {
     void requestPermissionAndLocate();
   }, [requestPermissionAndLocate]);
 
+  // Suscripción a parámetros globales de tarifas configurados desde el panel admin
   useEffect(() => {
-    return viajesRepository.suscribirConfiguracionTarifas((nuevaConfig) => {
-      setConfigTarifas(nuevaConfig);
-    });
+    return viajesRepository.suscribirConfiguracionTarifas(setConfigPlataforma);
   }, []);
+
+  // Recuperación automática del viaje activo al abrir la app
+  useEffect(() => {
+    if (!userId) return;
+    let activo = true;
+
+    async function recuperarViaje() {
+      try {
+        const activa = await viajesRepository.obtenerViajeActivoPasajero(userId!);
+        if (!activo || !activa) return;
+
+        const orig: Coordenadas = {
+          latitude: activa.origen_lat,
+          longitude: activa.origen_lng,
+        };
+        const dest: Coordenadas = {
+          latitude: activa.destino_lat,
+          longitude: activa.destino_lng,
+        };
+        setOriginCoords(orig);
+        setDestinoCoords(dest);
+        setOrigenDireccion(
+          activa.origen_direccion ?? formatearReferenciaHuancavelica(orig),
+        );
+        setDestinoDireccion(
+          activa.destino_direccion ?? formatearReferenciaHuancavelica(dest),
+        );
+        setCentroMapa(orig);
+
+        if (activa.estado === 'buscando') {
+          setSolicitud(activa);
+        } else {
+          setViajeAceptado(activa);
+        }
+      } catch (e) {
+        console.warn('[mapa] Error al recuperar viaje activo:', e);
+      }
+    }
+
+    void recuperarViaje();
+    return () => {
+      activo = false;
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (!centroMapa) {
@@ -105,20 +172,42 @@ export default function PantallaMapa() {
     }
   }, [coords, centroMapa]);
 
+  const { distanciaKm, tarifaSugerida } = useMemo(() => {
+    if (!originCoords || !destinoCoords) {
+      return { distanciaKm: null, tarifaSugerida: null };
+    }
+    const km = calcularDistanciaHaversine(
+      originCoords.latitude,
+      originCoords.longitude,
+      destinoCoords.latitude,
+      destinoCoords.longitude,
+    );
+    const desglose = calcularTarifa({
+      distanciaKm: km,
+      duracionMin: Math.max(3, Math.round(km * 3)),
+      tarifaBase: configPlataforma.tarifa_base,
+      tarifaPorKm: configPlataforma.precio_por_km,
+      tarifaPorMin: 0,
+      tarifaMinima: configPlataforma.tarifa_minima,
+    });
+    return {
+      distanciaKm: km,
+      tarifaSugerida: desglose.total,
+    };
+  }, [originCoords, destinoCoords, configPlataforma]);
+
   function centrarEnHuancavelica(punto: Coordenadas = HUANCAVELICA_CENTRO) {
     setCentroMapa(punto);
     setMensaje('Mapa centrado en Huancavelica.');
   }
 
   // Suscripción en tiempo real a las ofertas de la solicitud activa.
-  // Se cancela en cuanto se acepta una oferta (ya no interesan más ofertas).
   useEffect(() => {
     if (!solicitud || enViaje) return;
     setOfertas([]);
     return viajesRepository.suscribirOfertas(
       solicitud.id,
       (oferta) => {
-        // Reemplazar oferta existente si el mismo conductor envía contraoferta o actualización
         setOfertas((prev) => {
           const sinEsta = prev.filter(
             (o) => o.id !== oferta.id && o.conductor_id !== oferta.conductor_id,
@@ -129,14 +218,33 @@ export default function PantallaMapa() {
       (ofertaIdEliminada) => {
         setOfertas((prev) => prev.filter((o) => o.id !== ofertaIdEliminada));
       },
-      (error) => {
-        console.warn('[mapa] Error en suscripción de ofertas:', error);
+      (err) => {
+        console.warn('[mapa] Error en suscripción de ofertas:', err);
       },
     );
   }, [solicitud, enViaje]);
 
+  // Cargar perfiles reales de los conductores que envían ofertas
+  useEffect(() => {
+    ofertas.forEach((oferta) => {
+      const id = oferta.conductor_id;
+      if (!fetchedConductoresRef.current.has(id)) {
+        fetchedConductoresRef.current.add(id);
+        void authRepository
+          .obtenerPerfil(id)
+          .then((p) => {
+            if (p) {
+              setPerfilesOfertas((prev) => ({ ...prev, [id]: p }));
+            }
+          })
+          .catch(() => {
+            fetchedConductoresRef.current.delete(id);
+          });
+      }
+    });
+  }, [ofertas]);
+
   // Suscripción en tiempo real a los cambios de estado del viaje aceptado.
-  // Se cancela al finalizar (viaje → null) o al desmontar la pantalla.
   const idViajeAceptado = viajeAceptado?.id;
   useEffect(() => {
     if (!idViajeAceptado) return;
@@ -146,39 +254,63 @@ export default function PantallaMapa() {
     );
   }, [idViajeAceptado]);
 
+  // Suscripción en tiempo real al perfil y ubicación GPS del conductor asignado.
+  const idConductorAsignado = viajeAceptado?.conductor_id;
+  useEffect(() => {
+    if (!idConductorAsignado) {
+      setPerfilConductor(null);
+      return;
+    }
+    return authRepository.suscribirPerfil(idConductorAsignado, (p) => {
+      setPerfilConductor(p);
+    });
+  }, [idConductorAsignado]);
+
+  const coordsConductor = useMemo(
+    () => extraerCoordenadasPerfil(perfilConductor),
+    [perfilConductor],
+  );
+
   function fijarOrigen() {
     if (!centroMapa) return;
-    setOriginCoords(centroMapa);
-    setMensaje('Origen fijado. Si quieres, mueve el mapa para fijar el destino.');
+    const punto = centroMapa;
+    setOriginCoords(punto);
+    setOrigenDireccion(formatearReferenciaHuancavelica(punto));
+    setMensaje('Origen fijado. Mueve el mapa para fijar el destino.');
     setError(null);
+    void obtenerDireccionLegible(punto).then((dir) => {
+      setOrigenDireccion(dir);
+    });
   }
 
   function fijarDestino() {
     if (!centroMapa) return;
-    setDestinoCoords(centroMapa);
-    if (originCoords) {
-      const distKm = calcularDistanciaHaversine(
+    const punto = centroMapa;
+    setDestinoCoords(punto);
+    setDestinoDireccion(formatearReferenciaHuancavelica(punto));
+    setMensaje('Destino fijado. Revisa la tarifa sugerida o propón la tuya.');
+    setError(null);
+    void obtenerDireccionLegible(punto).then((dir) => {
+      setDestinoDireccion(dir);
+    });
+
+    if (originCoords && !tarifa.trim()) {
+      const km = calcularDistanciaHaversine(
         originCoords.latitude,
         originCoords.longitude,
-        centroMapa.latitude,
-        centroMapa.longitude,
+        punto.latitude,
+        punto.longitude,
       );
       const desglose = calcularTarifa({
-        distanciaKm: distKm,
-        duracionMin: 0,
-        tarifaBase: configTarifas.tarifa_base,
-        tarifaPorKm: configTarifas.precio_por_km,
+        distanciaKm: km,
+        duracionMin: Math.max(3, Math.round(km * 3)),
+        tarifaBase: configPlataforma.tarifa_base,
+        tarifaPorKm: configPlataforma.precio_por_km,
         tarifaPorMin: 0,
-        tarifaMinima: configTarifas.tarifa_minima,
+        tarifaMinima: configPlataforma.tarifa_minima,
       });
-      if (!tarifa.trim()) {
-        setTarifa(desglose.total.toFixed(2));
-      }
-      setMensaje(`Destino fijado. Tarifa sugerida: S/ ${desglose.total.toFixed(2)}`);
-    } else {
-      setMensaje('Destino fijado.');
+      setTarifa(desglose.total.toFixed(2));
     }
-    setError(null);
   }
 
   async function pedirTaxi() {
@@ -201,15 +333,25 @@ export default function PantallaMapa() {
 
     const precio = parseFloat(tarifa.trim().replace(',', '.'));
     if (Number.isNaN(precio) || precio <= 0) {
-      setError(`Ingresa una tarifa válida, por ejemplo ${configTarifas.tarifa_minima.toFixed(2)}.`);
-      return;
-    }
-    if (precio < configTarifas.tarifa_minima) {
       setError(
-        `La tarifa mínima configurada es S/ ${configTarifas.tarifa_minima.toFixed(2)}.`,
+        `Ingresa una tarifa válida, por ejemplo ${configPlataforma.tarifa_minima.toFixed(2)}.`,
       );
       return;
     }
+    if (precio < configPlataforma.tarifa_minima) {
+      setError(
+        `La tarifa mínima configurada es S/ ${configPlataforma.tarifa_minima.toFixed(2)}.`,
+      );
+      return;
+    }
+
+    const destinoFinal = destinoCoords ?? centroMapa ?? originCoords;
+    const distKm = calcularDistanciaHaversine(
+      originCoords.latitude,
+      originCoords.longitude,
+      destinoFinal.latitude,
+      destinoFinal.longitude,
+    );
 
     setOperando(true);
     setError(null);
@@ -218,9 +360,17 @@ export default function PantallaMapa() {
       const creada = await viajesRepository.crearSolicitud(
         sesion.user.id,
         originCoords,
-        destinoCoords ?? centroMapa ?? originCoords,
+        destinoFinal,
         precio,
+        {
+          origen_direccion:
+            origenDireccion ?? formatearReferenciaHuancavelica(originCoords),
+          destino_direccion:
+            destinoDireccion ?? formatearReferenciaHuancavelica(destinoFinal),
+          distancia_km: Math.round(distKm * 100) / 100,
+        },
       );
+      setDestinoCoords(destinoFinal);
       setSolicitud(creada);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo crear la solicitud.');
@@ -243,8 +393,8 @@ export default function PantallaMapa() {
       );
       setViajeAceptado(viaje);
       setOfertas([]);
-      const conductor = await authRepository.obtenerPerfil(oferta.conductor_id);
-      setPerfilConductor(conductor);
+      setEstrellasSeleccionadas(5);
+      setCalificacionEnviada(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo aceptar la oferta.');
     } finally {
@@ -274,13 +424,90 @@ export default function PantallaMapa() {
     setOfertas([]);
     setViajeAceptado(null);
     setPerfilConductor(null);
+    setOriginCoords(null);
+    setDestinoCoords(null);
+    setOrigenDireccion(null);
+    setDestinoDireccion(null);
+    setTarifa('');
+    setEstrellasSeleccionadas(5);
+    setCalificacionEnviada(false);
     setMensaje(null);
     setError(null);
   }
 
+  async function llamarConductor() {
+    const tel = perfilConductor?.telefono?.trim();
+    if (!tel) {
+      Alert.alert('Sin teléfono', 'El conductor no tiene un teléfono registrado.');
+      return;
+    }
+    const url = `tel:${tel.replace(/\s+/g, '')}`;
+    const puede = await Linking.canOpenURL(url);
+    if (puede) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('Teléfono del conductor', tel);
+    }
+  }
+
+  async function abrirWhatsAppConductor() {
+    const numero = normalizarTelefonoWhatsApp(perfilConductor?.telefono ?? '');
+    if (!numero) {
+      Alert.alert('Sin WhatsApp', 'El conductor no tiene un celular válido.');
+      return;
+    }
+    const msg = encodeURIComponent(
+      `Hola ${perfilConductor?.nombre ?? ''}, soy tu pasajero de Taxi HVCA.`,
+    );
+    await Linking.openURL(`https://wa.me/${numero}?text=${msg}`);
+  }
+
+  async function compartirRutaViaje() {
+    if (!viajeAceptado) return;
+    const orig = viajeAceptado.origen_direccion ?? `${viajeAceptado.origen_lat.toFixed(4)}, ${viajeAceptado.origen_lng.toFixed(4)}`;
+    const dest = viajeAceptado.destino_direccion ?? `${viajeAceptado.destino_lat.toFixed(4)}, ${viajeAceptado.destino_lng.toFixed(4)}`;
+    const linkMaps = `https://www.google.com/maps/dir/?api=1&origin=${viajeAceptado.origen_lat},${viajeAceptado.origen_lng}&destination=${viajeAceptado.destino_lat},${viajeAceptado.destino_lng}`;
+    await Share.share({
+      message: `🚕 Estoy viajando con Taxi HVCA.\nConductor: ${perfilConductor?.nombre ?? 'Asignado'} (${perfilConductor?.vehiculo ?? 'Vehículo'})\nOrigen: ${orig}\nDestino: ${dest}\nSeguir ruta: ${linkMaps}`,
+    });
+  }
+
+  async function enviarCalificacionConductor() {
+    if (!viajeAceptado || !userId || !viajeAceptado.conductor_id) return;
+    setOperando(true);
+    setError(null);
+    try {
+      await viajesRepository.calificarViaje({
+        solicitudId: viajeAceptado.id,
+        evaluadorId: userId,
+        evaluadoId: viajeAceptado.conductor_id,
+        rolEvaluador: 'pasajero',
+        estrellas: estrellasSeleccionadas,
+      });
+      setCalificacionEnviada(true);
+      setMensaje('¡Gracias por calificar tu viaje!');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo enviar la calificación.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  const puntoOrigenMapa = viajeAceptado
+    ? { latitude: viajeAceptado.origen_lat, longitude: viajeAceptado.origen_lng }
+    : solicitud
+      ? { latitude: solicitud.origen_lat, longitude: solicitud.origen_lng }
+      : originCoords;
+
+  const puntoDestinoMapa = viajeAceptado
+    ? { latitude: viajeAceptado.destino_lat, longitude: viajeAceptado.destino_lng }
+    : solicitud
+      ? { latitude: solicitud.destino_lat, longitude: solicitud.destino_lng }
+      : destinoCoords;
+
   return (
     <View style={styles.contenedor}>
-      {coords && centroMapa ? (
+      {centroMapa ? (
         <MapView
           style={styles.mapa}
           initialRegion={{
@@ -289,15 +516,65 @@ export default function PantallaMapa() {
             latitudeDelta: ZOOM_INICIAL,
             longitudeDelta: ZOOM_INICIAL,
           }}
-          showsUserLocation
+          showsUserLocation={Boolean(coords)}
           showsMyLocationButton={false}
-          onRegionChangeComplete={(region) =>
-            setCentroMapa({
-              latitude: region.latitude,
-              longitude: region.longitude,
-            })
-          }
-        />
+          onRegionChangeComplete={(region) => {
+            if (!solicitud && !enViaje) {
+              setCentroMapa({
+                latitude: region.latitude,
+                longitude: region.longitude,
+              });
+            }
+          }}
+        >
+          {puntoOrigenMapa ? (
+            <Marker
+              coordinate={puntoOrigenMapa}
+              title="Origen"
+              description={origenDireccion ?? 'Punto de recogida'}
+              pinColor="#16A34A"
+            />
+          ) : null}
+
+          {puntoDestinoMapa ? (
+            <Marker
+              coordinate={puntoDestinoMapa}
+              title="Destino"
+              description={destinoDireccion ?? 'Punto de llegada'}
+              pinColor="#DC2626"
+            />
+          ) : null}
+
+          {puntoOrigenMapa && puntoDestinoMapa ? (
+            <Polyline
+              coordinates={[puntoOrigenMapa, puntoDestinoMapa]}
+              strokeColor={colores.primario}
+              strokeWidth={4}
+            />
+          ) : null}
+
+          {enViaje && coordsConductor ? (
+            <Marker
+              coordinate={coordsConductor}
+              title={`🚕 ${perfilConductor?.nombre ?? 'Tu conductor'}`}
+              description={perfilConductor?.vehiculo ?? 'Ubicación en tiempo real'}
+              pinColor="#F59E0B"
+            />
+          ) : null}
+
+          {enViaje &&
+          coordsConductor &&
+          puntoOrigenMapa &&
+          (viajeAceptado?.estado === 'aceptado' ||
+            viajeAceptado?.estado === 'en_camino_origen') ? (
+            <Polyline
+              coordinates={[coordsConductor, puntoOrigenMapa]}
+              strokeColor="#F59E0B"
+              strokeWidth={3}
+              lineDashPattern={[6, 4]}
+            />
+          ) : null}
+        </MapView>
       ) : (
         <View style={styles.estadoOverlay}>
           {loading ? (
@@ -317,8 +594,8 @@ export default function PantallaMapa() {
         </View>
       )}
 
-      {/* Pin central fijo (no es un Marker arrastrable) */}
-      {coords ? (
+      {/* Pin central fijo solo mientras se elige origen o destino */}
+      {centroMapa && !solicitud && !enViaje ? (
         <View pointerEvents="none" style={styles.pin}>
           <View style={styles.pinCirculo}>
             <View style={styles.pinPunto} />
@@ -327,7 +604,7 @@ export default function PantallaMapa() {
         </View>
       ) : null}
 
-      {/* Cerrar sesión (acceso rápido para pruebas) */}
+      {/* Cerrar sesión (acceso rápido) */}
       <Pressable
         onPress={() => void cerrarSesion()}
         style={[
@@ -372,15 +649,34 @@ export default function PantallaMapa() {
               </>
             ) : (
               <>
-                <Text style={styles.ayuda}>
-                  Origen: {originCoords.latitude.toFixed(5)},{' '}
-                  {originCoords.longitude.toFixed(5)}
-                </Text>
-                {destinoCoords ? (
-                  <Text style={styles.ayuda}>
-                    Destino: {destinoCoords.latitude.toFixed(5)},{' '}
-                    {destinoCoords.longitude.toFixed(5)}
+                <View style={styles.filaPuntoFijado}>
+                  <Text style={styles.ayudaPunto} numberOfLines={1}>
+                    🟢 Origen: {origenDireccion ?? `${originCoords.latitude.toFixed(4)}, ${originCoords.longitude.toFixed(4)}`}
                   </Text>
+                  <Pressable
+                    onPress={() => {
+                      setOriginCoords(null);
+                      setOrigenDireccion(null);
+                    }}
+                  >
+                    <Text style={styles.enlaceCambiar}>Cambiar</Text>
+                  </Pressable>
+                </View>
+
+                {destinoCoords ? (
+                  <View style={styles.filaPuntoFijado}>
+                    <Text style={styles.ayudaPunto} numberOfLines={1}>
+                      🔴 Destino: {destinoDireccion ?? `${destinoCoords.latitude.toFixed(4)}, ${destinoCoords.longitude.toFixed(4)}`}
+                    </Text>
+                    <Pressable
+                      onPress={() => {
+                        setDestinoCoords(null);
+                        setDestinoDireccion(null);
+                      }}
+                    >
+                      <Text style={styles.enlaceCambiar}>Cambiar</Text>
+                    </Pressable>
+                  </View>
                 ) : (
                   <Button
                     label="Fijar Destino"
@@ -389,6 +685,19 @@ export default function PantallaMapa() {
                     estilo={styles.botonMitad}
                   />
                 )}
+
+                {tarifaSugerida !== null && distanciaKm !== null ? (
+                  <Pressable
+                    style={styles.chipTarifaSugerida}
+                    onPress={() => setTarifa(tarifaSugerida.toFixed(2))}
+                  >
+                    <Text style={styles.textoChipSugerida}>
+                      💡 Tarifa sugerida ({distanciaKm.toFixed(1)} km): S/{' '}
+                      {tarifaSugerida.toFixed(2)} · Toca para usar
+                    </Text>
+                  </Pressable>
+                ) : null}
+
                 <Input
                   etiqueta="Tu tarifa propuesta"
                   value={tarifa}
@@ -422,6 +731,7 @@ export default function PantallaMapa() {
               <Text style={styles.buscando}>Buscando conductores...</Text>
               <Text style={styles.ayuda}>
                 Tu tarifa ofrecida: S/ {Number(solicitud.precio_inicial).toFixed(2)}
+                {solicitud.distancia_km ? ` · ${solicitud.distancia_km.toFixed(1)} km` : ''}
               </Text>
               {ofertas.length === 0 ? (
                 <Text style={styles.ayuda}>
@@ -432,24 +742,48 @@ export default function PantallaMapa() {
                   style={styles.listaOfertas}
                   contentContainerStyle={styles.listaContenido}
                 >
-                  {ofertas.map((oferta) => (
-                    <View key={oferta.id} style={styles.tarjetaOferta}>
-                      <View style={styles.tarjetaTexto}>
-                        <Text style={styles.ofertaTitulo}>
-                          Conductor · {oferta.conductor_id.slice(0, 8)}
-                        </Text>
-                        <Text style={styles.ofertaPrecio}>
-                          S/ {Number(oferta.precio).toFixed(2)}
-                        </Text>
+                  {ofertas.map((oferta) => {
+                    const perfilCond = perfilesOfertas[oferta.conductor_id];
+                    const nombreCond =
+                      perfilCond?.nombre ??
+                      oferta.conductor_nombre ??
+                      `Conductor · ${oferta.conductor_id.slice(0, 6)}`;
+                    const ratingCond =
+                      perfilCond?.calificacion_promedio ??
+                      oferta.conductor_calificacion ??
+                      5.0;
+                    const vehiculoCond =
+                      perfilCond?.vehiculo ??
+                      oferta.conductor_vehiculo ??
+                      'Vehículo registrado';
+
+                    return (
+                      <View key={oferta.id} style={styles.tarjetaOferta}>
+                        <View style={styles.tarjetaTexto}>
+                          <View style={styles.filaNombreOferta}>
+                            <Text style={styles.ofertaTitulo} numberOfLines={1}>
+                              {nombreCond}
+                            </Text>
+                            <Text style={styles.ofertaRating}>
+                              ★ {ratingCond.toFixed(1)}
+                            </Text>
+                          </View>
+                          <Text style={styles.ofertaVehiculo} numberOfLines={1}>
+                            🚗 {vehiculoCond}
+                          </Text>
+                          <Text style={styles.ofertaPrecio}>
+                            S/ {Number(oferta.precio).toFixed(2)}
+                          </Text>
+                        </View>
+                        <Button
+                          label="Aceptar"
+                          onPress={() => void aceptarOferta(oferta)}
+                          cargando={operando}
+                          estilo={styles.botonAceptar}
+                        />
                       </View>
-                      <Button
-                        label="Aceptar"
-                        onPress={() => void aceptarOferta(oferta)}
-                        cargando={operando}
-                        estilo={styles.botonAceptar}
-                      />
-                    </View>
-                  ))}
+                    );
+                  })}
                 </ScrollView>
               )}
               <Button
@@ -470,8 +804,13 @@ export default function PantallaMapa() {
             { paddingBottom: Math.max(insets.bottom, 16) },
           ]}
         >
+          {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Text style={styles.viajeTitulo}>Viaje en curso</Text>
+          <Text style={styles.viajeTitulo}>
+            {viajeAceptado.estado === 'completado'
+              ? '¡Llegaste a tu destino!'
+              : 'Viaje en curso'}
+          </Text>
           <Text style={styles.viajeEstado}>
             {textoEstadoViaje(viajeAceptado.estado)}
           </Text>
@@ -480,7 +819,10 @@ export default function PantallaMapa() {
             <>
               <View style={styles.viajeFila}>
                 <Text style={styles.viajeEtiqueta}>Conductor</Text>
-                <Text style={styles.viajeValor}>{perfilConductor.nombre}</Text>
+                <Text style={styles.viajeValor}>
+                  {perfilConductor.nombre} (★{' '}
+                  {perfilConductor.calificacion_promedio.toFixed(1)})
+                </Text>
               </View>
               <View style={styles.viajeFila}>
                 <Text style={styles.viajeEtiqueta}>Vehículo</Text>
@@ -501,10 +843,78 @@ export default function PantallaMapa() {
               ).toFixed(2)}
             </Text>
           </View>
+
+          {viajeAceptado.estado !== 'completado' &&
+          viajeAceptado.estado !== 'cancelada' ? (
+            <View style={styles.filaContactoViaje}>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void llamarConductor()}
+              >
+                <Text style={styles.textoContacto}>📞 Llamar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void abrirWhatsAppConductor()}
+              >
+                <Text style={styles.textoContacto}>💬 WhatsApp</Text>
+              </Pressable>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void compartirRutaViaje()}
+              >
+                <Text style={styles.textoContacto}>📤 Compartir</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {viajeAceptado.estado === 'completado' &&
+          !calificacionEnviada &&
+          !viajeAceptado.calificacion_conductor ? (
+            <View style={styles.cajaCalificacion}>
+              <Text style={styles.tituloCalificacion}>
+                Califica a tu conductor
+              </Text>
+              <View style={styles.filaEstrellas}>
+                {[1, 2, 3, 4, 5].map((estrella) => (
+                  <Pressable
+                    key={estrella}
+                    onPress={() => setEstrellasSeleccionadas(estrella)}
+                    style={styles.botonEstrella}
+                  >
+                    <Text
+                      style={[
+                        styles.iconoEstrella,
+                        estrella <= estrellasSeleccionadas
+                          ? styles.estrellaActiva
+                          : styles.estrellaInactiva,
+                      ]}
+                    >
+                      ★
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Button
+                label="Enviar calificación"
+                onPress={() => void enviarCalificacionConductor()}
+                cargando={operando}
+                estilo={styles.boton}
+              />
+            </View>
+          ) : null}
+
           {viajeAceptado.estado === 'completado' ||
           viajeAceptado.estado === 'cancelada' ? (
             <Button
               label="Nueva solicitud"
+              variante={
+                viajeAceptado.estado === 'completado' &&
+                !calificacionEnviada &&
+                !viajeAceptado.calificacion_conductor
+                  ? 'secundario'
+                  : 'primario'
+              }
               onPress={() => void cancelarSolicitud()}
               estilo={styles.boton}
             />
@@ -618,14 +1028,48 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 8,
   },
+  filaPuntoFijado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  ayudaPunto: {
+    flex: 1,
+    color: colores.texto,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  enlaceCambiar: {
+    color: colores.primario,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chipTarifaSugerida: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+  },
+  textoChipSugerida: {
+    color: '#1D4ED8',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   botonMitad: {
+    flex: 1,
     marginBottom: 12,
   },
   inputTarifa: {
     marginBottom: 12,
   },
   boton: {
-    marginTop: 4,
+    marginTop: 6,
   },
   buscando: {
     fontSize: 18,
@@ -634,7 +1078,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   listaOfertas: {
-    maxHeight: 180,
+    maxHeight: 200,
     marginVertical: 8,
   },
   listaContenido: {
@@ -654,15 +1098,33 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 12,
   },
+  filaNombreOferta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
   ofertaTitulo: {
+    flex: 1,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colores.texto,
   },
-  ofertaPrecio: {
-    fontSize: 14,
+  ofertaRating: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+  ofertaVehiculo: {
+    fontSize: 12,
     color: colores.textoSuave,
     marginTop: 2,
+  },
+  ofertaPrecio: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colores.primario,
+    marginTop: 4,
   },
   botonAceptar: {
     minHeight: 40,
@@ -672,7 +1134,7 @@ const styles = StyleSheet.create({
   },
   tarjetaViaje: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 16,
     left: 16,
     right: 16,
     borderRadius: 16,
@@ -716,6 +1178,59 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: colores.texto,
+  },
+  filaContactoViaje: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  botonContacto: {
+    flex: 1,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: 10,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  textoContacto: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  cajaCalificacion: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: colores.borde,
+    marginBottom: 6,
+  },
+  tituloCalificacion: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colores.texto,
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  filaEstrellas: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  botonEstrella: {
+    padding: 4,
+  },
+  iconoEstrella: {
+    fontSize: 28,
+  },
+  estrellaActiva: {
+    color: '#F59E0B',
+  },
+  estrellaInactiva: {
+    color: '#D1D5DB',
   },
   filaAccionesMapa: {
     flexDirection: 'row',

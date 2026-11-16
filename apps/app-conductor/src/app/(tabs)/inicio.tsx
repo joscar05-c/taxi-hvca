@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Alert,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 
 import {
   Button,
@@ -7,6 +17,8 @@ import {
   authRepository,
   calcularDistanciaHaversine,
   colores,
+  extraerCoordenadasPerfil,
+  formatearReferenciaHuancavelica,
   HUANCAVELICA_CENTRO,
   PUNTOS_SIMULACION_HVCA,
   useAuth,
@@ -14,6 +26,7 @@ import {
   useForegroundLocation,
   viajesRepository,
   type Coordenadas,
+  type Profile,
   type PuntoSimulacionHvca,
   type SolicitudViaje,
 } from '@hvca/shared';
@@ -46,19 +59,13 @@ function etiquetaEstadoViaje(estado: SolicitudViaje['estado']): string {
   }
 }
 
-/**
- * Parsea un punto PostGIS (EWKT) como "SRID=4326;POINT(lng lat)" y devuelve
- * sus coordenadas. Devuelve null si el texto no tiene una geometría Point.
- */
-function parsearPuntoPostgis(texto: string | null): Coordenadas | null {
-  const match = texto?.match(
-    /POINT\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)/i,
-  );
-  if (!match) return null;
-  const lat = parseFloat(match[2]);
-  const lng = parseFloat(match[1]);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { latitude: lat, longitude: lng };
+function normalizarTelefonoWhatsApp(telefono: string): string | null {
+  const digitos = telefono.replace(/\D/g, '');
+  if (!digitos) return null;
+  if (digitos.length === 9 && digitos.startsWith('9')) {
+    return `51${digitos}`;
+  }
+  return digitos;
 }
 
 export default function PantallaInicio() {
@@ -79,13 +86,49 @@ export default function PantallaInicio() {
     new Set(),
   );
   const [viajeActivo, setViajeActivo] = useState<SolicitudViaje | null>(null);
+  const [perfilPasajero, setPerfilPasajero] = useState<Profile | null>(null);
+  const [viajeParaCalificar, setViajeParaCalificar] =
+    useState<SolicitudViaje | null>(null);
+  const [estrellasPasajero, setEstrellasPasajero] = useState<number>(5);
+
   const [contraofertaId, setContraofertaId] = useState<string | null>(null);
   const [precioContraoferta, setPrecioContraoferta] = useState('');
   const [vehiculo, setVehiculo] = useState('');
 
+  const idConductor = sesion?.user?.id;
+
   useEffect(() => {
     if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
   }, [perfil?.vehiculo]);
+
+  // Recuperar automáticamente el viaje activo asignado al conductor al abrir la app
+  useEffect(() => {
+    if (!idConductor) return;
+    let activo = true;
+    void viajesRepository
+      .obtenerViajeActivoConductor(idConductor)
+      .then((activa) => {
+        if (activo && activa) {
+          setViajeActivo(activa);
+        }
+      })
+      .catch((e) => {
+        console.warn('[inicio] Error al recuperar viaje activo:', e);
+      });
+    return () => {
+      activo = false;
+    };
+  }, [idConductor]);
+
+  // Suscripción en tiempo real al perfil del pasajero del viaje activo
+  const idPasajeroActivo = viajeActivo?.pasajero_id;
+  useEffect(() => {
+    if (!idPasajeroActivo) {
+      setPerfilPasajero(null);
+      return;
+    }
+    return authRepository.suscribirPerfil(idPasajeroActivo, setPerfilPasajero);
+  }, [idPasajeroActivo]);
 
   // Modo simulación Huancavelica para desarrollo y emuladores
   const [simularHuancavelica, setSimularHuancavelica] = useState(false);
@@ -93,7 +136,6 @@ export default function PantallaInicio() {
     PUNTOS_SIMULACION_HVCA[0],
   );
 
-  // Detectar si el GPS actual reporta ubicación fuera de Huancavelica (típico de emuladores en EE.UU.)
   const esEmuladorFueraDeHvca = useMemo(() => {
     if (!coords) return false;
     const d = calcularDistanciaHaversine(
@@ -105,14 +147,12 @@ export default function PantallaInicio() {
     return d > 100;
   }, [coords]);
 
-  // Si detectamos emulador fuera de Huancavelica, activar la simulación por defecto
   useEffect(() => {
     if (esEmuladorFueraDeHvca) {
       setSimularHuancavelica(true);
     }
   }, [esEmuladorFueraDeHvca]);
 
-  // Posición efectiva del conductor: simulada si está activa, de lo contrario GPS
   const ubicacionConductor = useMemo<Coordenadas | null>(() => {
     if (simularHuancavelica) {
       return { latitude: puntoSimulado.latitude, longitude: puntoSimulado.longitude };
@@ -120,16 +160,22 @@ export default function PantallaInicio() {
     if (coords) {
       return { latitude: coords.latitude, longitude: coords.longitude };
     }
-    return parsearPuntoPostgis(perfil?.ubicacion_actual ?? null);
+    return extraerCoordenadasPerfil(perfil);
   }, [simularHuancavelica, puntoSimulado, coords, perfil]);
 
-  // Buffer de todas las solicitudes activas para evitar descartar si el GPS tarda en inicializar
-  const solicitudesPendientesRef = useRef<Map<string, SolicitudViaje>>(new Map());
+  // En modo simulación conectado, persistimos el punto simulado para que el pasajero lo vea en vivo
+  useEffect(() => {
+    if (!idConductor || !simularHuancavelica || (!isTracking && !viajeActivo)) {
+      return;
+    }
+    void authRepository
+      .actualizarUbicacion(puntoSimulado.latitude, puntoSimulado.longitude)
+      .catch(() => undefined);
+  }, [idConductor, simularHuancavelica, puntoSimulado, isTracking, viajeActivo]);
 
-  // Ref para leer la posición dentro del callback realtime sin resuscribir.
+  const solicitudesPendientesRef = useRef<Map<string, SolicitudViaje>>(new Map());
   const ubicacionRef = useRef(ubicacionConductor);
 
-  // Reevalúa todas las solicitudes buffered contra una posición dada
   const recalcularCercanas = useCallback((pos: Coordenadas | null) => {
     if (!pos) return;
     const filtradas: SolicitudCercana[] = [];
@@ -152,35 +198,30 @@ export default function PantallaInicio() {
     recalcularCercanas(ubicacionConductor);
   }, [ubicacionConductor, recalcularCercanas]);
 
-  // Al conectarse pedimos una posición en primer plano para medir distancias.
   useEffect(() => {
     if (isTracking) {
       void requestPermissionAndLocate();
     }
   }, [isTracking, requestPermissionAndLocate]);
 
-  const manejarNuevaSolicitud = useCallback(
-    (solicitud: SolicitudViaje) => {
-      // Guardar en el buffer persistente
-      solicitudesPendientesRef.current.set(solicitud.id, solicitud);
-      const pos = ubicacionRef.current;
-      if (!pos) return; // Se reevaluará cuando se obtenga la ubicación gracias a recalcularCercanas
+  const manejarNuevaSolicitud = useCallback((solicitud: SolicitudViaje) => {
+    solicitudesPendientesRef.current.set(solicitud.id, solicitud);
+    const pos = ubicacionRef.current;
+    if (!pos) return;
 
-      const distanciaKm = calcularDistanciaHaversine(
-        solicitud.origen_lat,
-        solicitud.origen_lng,
-        pos.latitude,
-        pos.longitude,
-      );
-      if (distanciaKm >= DISTANCIA_MAX_KM) return;
+    const distanciaKm = calcularDistanciaHaversine(
+      solicitud.origen_lat,
+      solicitud.origen_lng,
+      pos.latitude,
+      pos.longitude,
+    );
+    if (distanciaKm >= DISTANCIA_MAX_KM) return;
 
-      setSolicitudesCercanas((prev) => {
-        const sinEsta = prev.filter((s) => s.solicitud.id !== solicitud.id);
-        return [...sinEsta, { solicitud, distanciaKm }];
-      });
-    },
-    [],
-  );
+    setSolicitudesCercanas((prev) => {
+      const sinEsta = prev.filter((s) => s.solicitud.id !== solicitud.id);
+      return [...sinEsta, { solicitud, distanciaKm }];
+    });
+  }, []);
 
   const manejarSolicitudEliminada = useCallback((solicitudId: string) => {
     solicitudesPendientesRef.current.delete(solicitudId);
@@ -198,7 +239,6 @@ export default function PantallaInicio() {
   }, [isTracking, manejarNuevaSolicitud, manejarSolicitudEliminada]);
 
   // Por cada solicitud con oferta enviada, escuchamos si el pasajero la acepta o cancela.
-  const idConductor = sesion?.user?.id;
   useEffect(() => {
     const limpiadores: Array<() => void> = [];
     ofertasEnviadas.forEach((solicitudId) => {
@@ -210,7 +250,6 @@ export default function PantallaInicio() {
               if (solicitud.conductor_id === idConductor) {
                 setViajeActivo(solicitud);
               } else {
-                // Pasajero aceptó a otro conductor: remover oferta de pendientes
                 setOfertasEnviadas((prev) => {
                   const nuevo = new Set(prev);
                   nuevo.delete(solicitudId);
@@ -241,8 +280,8 @@ export default function PantallaInicio() {
               });
             }
           },
-          (error) => {
-            console.warn('[inicio] Error en suscripción solicitud:', error);
+          (err) => {
+            console.warn('[inicio] Error en suscripción solicitud:', err);
           },
         ),
       );
@@ -252,7 +291,7 @@ export default function PantallaInicio() {
     };
   }, [ofertasEnviadas, idConductor]);
 
-  // Escuchar reactivamente cambios en el viaje activo (si el pasajero cancela mientras se viaja)
+  // Escuchar reactivamente cambios en el viaje activo
   useEffect(() => {
     if (!viajeActivo?.id) return;
     const unsub = viajesRepository.suscribirCambiosSolicitud(
@@ -278,8 +317,8 @@ export default function PantallaInicio() {
           );
         }
       },
-      (error) => {
-        console.warn('[inicio] Error en suscripción viajeActivo:', error);
+      (err) => {
+        console.warn('[inicio] Error en suscripción viajeActivo:', err);
       },
     );
     return () => unsub();
@@ -339,6 +378,15 @@ export default function PantallaInicio() {
     });
   }
 
+  function construirMetaConductor() {
+    return {
+      conductor_nombre: perfil?.nombre,
+      conductor_vehiculo: perfil?.vehiculo ?? null,
+      conductor_calificacion: perfil?.calificacion_promedio ?? 5.0,
+      conductor_telefono: perfil?.telefono,
+    };
+  }
+
   async function aceptarSolicitud(solicitud: SolicitudViaje) {
     if (!sesion?.user) return;
 
@@ -365,6 +413,7 @@ export default function PantallaInicio() {
         solicitud.id,
         sesion.user.id,
         solicitud.precio_inicial,
+        construirMetaConductor(),
       );
       marcarOfertada(solicitud.id);
       setMensaje('Oferta enviada al pasajero.');
@@ -413,7 +462,12 @@ export default function PantallaInicio() {
     setMensaje(null);
     setOperando(true);
     try {
-      await viajesRepository.enviarOferta(solicitud.id, sesion.user.id, precio);
+      await viajesRepository.enviarOferta(
+        solicitud.id,
+        sesion.user.id,
+        precio,
+        construirMetaConductor(),
+      );
       marcarOfertada(solicitud.id);
       setContraofertaId(null);
       setMensaje('Contraoferta enviada.');
@@ -468,19 +522,44 @@ export default function PantallaInicio() {
     setError(null);
     setMensaje(null);
     try {
-      const idViaje = viajeActivo.id;
-      await viajesRepository.actualizarEstadoViaje(idViaje, 'completado');
+      const finalizada = await viajesRepository.actualizarEstadoViaje(
+        viajeActivo.id,
+        'completado',
+      );
+      setViajeParaCalificar(finalizada);
+      setEstrellasPasajero(5);
       setViajeActivo(null);
       setOfertasEnviadas((prev) => {
         const nuevo = new Set(prev);
-        nuevo.delete(idViaje);
+        nuevo.delete(finalizada.id);
         return nuevo;
       });
       setContraofertaId(null);
       setPrecioContraoferta('');
-      setMensaje('Viaje completado. De nuevo en el radar.');
+      setMensaje('Viaje completado. Califica al pasajero para continuar.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo finalizar el viaje.');
+    } finally {
+      setOperando(false);
+    }
+  }
+
+  async function enviarCalificacionPasajero() {
+    if (!viajeParaCalificar || !idConductor) return;
+    setOperando(true);
+    setError(null);
+    try {
+      await viajesRepository.calificarViaje({
+        solicitudId: viajeParaCalificar.id,
+        evaluadorId: idConductor,
+        evaluadoId: viajeParaCalificar.pasajero_id,
+        rolEvaluador: 'conductor',
+        estrellas: estrellasPasajero,
+      });
+      setViajeParaCalificar(null);
+      setMensaje('¡Calificación registrada! De nuevo en el radar.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo calificar al pasajero.');
     } finally {
       setOperando(false);
     }
@@ -498,6 +577,42 @@ export default function PantallaInicio() {
     } finally {
       setOperando(false);
     }
+  }
+
+  async function llamarPasajero() {
+    const tel = perfilPasajero?.telefono?.trim();
+    if (!tel) {
+      Alert.alert('Sin teléfono', 'El pasajero no tiene teléfono registrado.');
+      return;
+    }
+    const url = `tel:${tel.replace(/\s+/g, '')}`;
+    const puede = await Linking.canOpenURL(url);
+    if (puede) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('Teléfono del pasajero', tel);
+    }
+  }
+
+  async function abrirWhatsAppPasajero() {
+    const numero = normalizarTelefonoWhatsApp(perfilPasajero?.telefono ?? '');
+    if (!numero) {
+      Alert.alert('Sin WhatsApp', 'El pasajero no tiene un número celular válido.');
+      return;
+    }
+    const msg = encodeURIComponent(
+      `Hola ${perfilPasajero?.nombre ?? ''}, soy tu conductor de Taxi HVCA.`,
+    );
+    await Linking.openURL(`https://wa.me/${numero}?text=${msg}`);
+  }
+
+  async function abrirNavegacionMaps() {
+    if (!viajeActivo) return;
+    const irADestino = viajeActivo.estado === 'en_curso';
+    const lat = irADestino ? viajeActivo.destino_lat : viajeActivo.origen_lat;
+    const lng = irADestino ? viajeActivo.destino_lng : viajeActivo.origen_lng;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    await Linking.openURL(url);
   }
 
   return (
@@ -610,6 +725,56 @@ export default function PantallaInicio() {
         )}
       </View>
 
+      {/* Tarjeta de calificación al pasajero tras completar el viaje */}
+      {viajeParaCalificar ? (
+        <View style={styles.radar}>
+          <View style={styles.tarjetaViajeActivo}>
+            <Text style={styles.viajeTitulo}>¡Viaje Finalizado!</Text>
+            <Text style={styles.viajeDetalle}>
+              Califica tu experiencia con el pasajero (S/{' '}
+              {Number(
+                viajeParaCalificar.precio_final ?? viajeParaCalificar.precio_inicial,
+              ).toFixed(2)}
+              )
+            </Text>
+            <View style={styles.filaEstrellas}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Pressable
+                  key={n}
+                  onPress={() => setEstrellasPasajero(n)}
+                  style={styles.botonEstrella}
+                >
+                  <Text
+                    style={[
+                      styles.iconoEstrella,
+                      n <= estrellasPasajero
+                        ? styles.estrellaActiva
+                        : styles.estrellaInactiva,
+                    ]}
+                  >
+                    ★
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.filaBotones}>
+              <Button
+                label="Enviar calificación"
+                onPress={() => void enviarCalificacionPasajero()}
+                cargando={operando}
+                estilo={styles.botonViaje}
+              />
+              <Button
+                label="Omitir"
+                variante="secundario"
+                onPress={() => setViajeParaCalificar(null)}
+                estilo={styles.botonViaje}
+              />
+            </View>
+          </View>
+        </View>
+      ) : null}
+
       {viajeActivo ? (
         <View style={styles.radar}>
           <View style={styles.tarjetaViajeActivo}>
@@ -617,13 +782,87 @@ export default function PantallaInicio() {
             <Text style={styles.viajeEstadoTexto}>
               {etiquetaEstadoViaje(viajeActivo.estado)}
             </Text>
+
+            {/* Mapa compacto del viaje */}
+            <View style={styles.mapaCompactoContenedor}>
+              <MapView
+                style={styles.mapaCompacto}
+                initialRegion={{
+                  latitude: viajeActivo.origen_lat,
+                  longitude: viajeActivo.origen_lng,
+                  latitudeDelta: 0.02,
+                  longitudeDelta: 0.02,
+                }}
+              >
+                <Marker
+                  coordinate={{
+                    latitude: viajeActivo.origen_lat,
+                    longitude: viajeActivo.origen_lng,
+                  }}
+                  title="Origen"
+                  pinColor="#16A34A"
+                />
+                <Marker
+                  coordinate={{
+                    latitude: viajeActivo.destino_lat,
+                    longitude: viajeActivo.destino_lng,
+                  }}
+                  title="Destino"
+                  pinColor="#DC2626"
+                />
+                {ubicacionConductor ? (
+                  <Marker
+                    coordinate={ubicacionConductor}
+                    title="Tu ubicación"
+                    pinColor="#F59E0B"
+                  />
+                ) : null}
+                <Polyline
+                  coordinates={[
+                    {
+                      latitude: viajeActivo.origen_lat,
+                      longitude: viajeActivo.origen_lng,
+                    },
+                    {
+                      latitude: viajeActivo.destino_lat,
+                      longitude: viajeActivo.destino_lng,
+                    },
+                  ]}
+                  strokeColor={colores.primario}
+                  strokeWidth={4}
+                />
+              </MapView>
+            </View>
+
+            {perfilPasajero ? (
+              <View style={styles.cajaPasajero}>
+                <Text style={styles.pasajeroNombre}>
+                  👤 Pasajero: {perfilPasajero.nombre} (★{' '}
+                  {perfilPasajero.calificacion_promedio.toFixed(1)})
+                </Text>
+                {perfilPasajero.telefono ? (
+                  <Text style={styles.pasajeroTelefono}>
+                    📱 {perfilPasajero.telefono}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+
             <Text style={styles.viajeOrigen}>
-              Origen: {viajeActivo.origen_lat.toFixed(5)},{' '}
-              {viajeActivo.origen_lng.toFixed(5)}
+              🟢 Origen:{' '}
+              {viajeActivo.origen_direccion ??
+                formatearReferenciaHuancavelica({
+                  latitude: viajeActivo.origen_lat,
+                  longitude: viajeActivo.origen_lng,
+                })}
             </Text>
             <Text style={styles.viajeDetalle}>
-              Destino: {viajeActivo.destino_lat.toFixed(5)},{' '}
-              {viajeActivo.destino_lng.toFixed(5)}
+              🔴 Destino:{' '}
+              {viajeActivo.destino_direccion ??
+                formatearReferenciaHuancavelica({
+                  latitude: viajeActivo.destino_lat,
+                  longitude: viajeActivo.destino_lng,
+                })}
             </Text>
             <Text style={styles.viajePrecio}>
               S/{' '}
@@ -631,6 +870,28 @@ export default function PantallaInicio() {
                 viajeActivo.precio_final ?? viajeActivo.precio_inicial,
               ).toFixed(2)}
             </Text>
+
+            <View style={styles.filaContactoViaje}>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void llamarPasajero()}
+              >
+                <Text style={styles.textoContacto}>📞 Llamar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void abrirWhatsAppPasajero()}
+              >
+                <Text style={styles.textoContacto}>💬 WhatsApp</Text>
+              </Pressable>
+              <Pressable
+                style={styles.botonContacto}
+                onPress={() => void abrirNavegacionMaps()}
+              >
+                <Text style={styles.textoContacto}>🗺️ Maps</Text>
+              </Pressable>
+            </View>
+
             <View style={styles.filaBotones}>
               {viajeActivo.estado === 'aceptado' ? (
                 <Button
@@ -692,15 +953,26 @@ export default function PantallaInicio() {
           ) : (
             solicitudesCercanas.map(({ solicitud, distanciaKm }) => {
               const ofertada = ofertasEnviadas.has(solicitud.id);
+              const origenTexto =
+                solicitud.origen_direccion ??
+                formatearReferenciaHuancavelica({
+                  latitude: solicitud.origen_lat,
+                  longitude: solicitud.origen_lng,
+                });
+              const destinoTexto =
+                solicitud.destino_direccion ??
+                formatearReferenciaHuancavelica({
+                  latitude: solicitud.destino_lat,
+                  longitude: solicitud.destino_lng,
+                });
+
               return (
                 <View key={solicitud.id} style={styles.tarjetaSolicitud}>
                   <Text style={styles.solicitudOrigen}>
-                    Origen: {solicitud.origen_lat.toFixed(5)},{' '}
-                    {solicitud.origen_lng.toFixed(5)}
+                    🟢 Origen: {origenTexto}
                   </Text>
                   <Text style={styles.solicitudDetalle}>
-                    Destino: {solicitud.destino_lat.toFixed(5)},{' '}
-                    {solicitud.destino_lng.toFixed(5)}
+                    🔴 Destino: {destinoTexto}
                   </Text>
                   <View style={styles.filaPrecio}>
                     <Text style={styles.solicitudPrecio}>
@@ -708,8 +980,8 @@ export default function PantallaInicio() {
                     </Text>
                     <Text style={styles.solicitudDistancia}>
                       {distanciaKm < 1
-                        ? `${Math.round(distanciaKm * 1000)} m`
-                        : `${distanciaKm.toFixed(1)} km`}
+                        ? `${Math.round(distanciaKm * 1000)} m de ti`
+                        : `${distanciaKm.toFixed(1)} km de ti`}
                     </Text>
                   </View>
 
@@ -894,7 +1166,7 @@ const styles = StyleSheet.create({
   filaBotones: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 4,
+    marginTop: 8,
   },
   botonOferta: {
     flex: 1,
@@ -927,6 +1199,35 @@ const styles = StyleSheet.create({
     color: colores.primario,
     marginBottom: 12,
   },
+  mapaCompactoContenedor: {
+    height: 190,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colores.borde,
+    marginBottom: 12,
+  },
+  mapaCompacto: {
+    flex: 1,
+  },
+  cajaPasajero: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginBottom: 10,
+  },
+  pasajeroNombre: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E3A8A',
+  },
+  pasajeroTelefono: {
+    fontSize: 12,
+    color: '#1D4ED8',
+    marginTop: 2,
+  },
   viajeOrigen: {
     fontSize: 14,
     fontWeight: '600',
@@ -942,7 +1243,44 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colores.primario,
     marginTop: 8,
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  filaContactoViaje: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  botonContacto: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: 10,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  textoContacto: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  filaEstrellas: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginVertical: 10,
+  },
+  botonEstrella: {
+    padding: 4,
+  },
+  iconoEstrella: {
+    fontSize: 30,
+  },
+  estrellaActiva: {
+    color: '#F59E0B',
+  },
+  estrellaInactiva: {
+    color: '#D1D5DB',
   },
   botonViaje: {
     flex: 1,

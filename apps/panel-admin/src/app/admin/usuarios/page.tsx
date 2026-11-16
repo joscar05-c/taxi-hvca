@@ -45,6 +45,10 @@ export default function UsuariosPage() {
       const docs: Profile[] = [];
       snap.forEach((d) => docs.push({ id: d.id, ...d.data() } as Profile));
       setUsuarios(docs);
+      setUsuarioEditar((actual) => {
+        if (!actual) return null;
+        return docs.find((d) => d.id === actual.id) ?? actual;
+      });
       setCargando(false);
     });
 
@@ -218,9 +222,16 @@ export default function UsuariosPage() {
 
                     <td className="py-4">
                       {u.vehiculo ? (
-                        <div className="flex items-center gap-1.5 text-gray-300 font-medium">
-                          <Car className="h-3.5 w-3.5 text-blue-400" />
-                          <span>{u.vehiculo}</span>
+                        <div>
+                          <div className="flex items-center gap-1.5 text-gray-300 font-medium">
+                            <Car className="h-3.5 w-3.5 text-blue-400" />
+                            <span>{u.vehiculo}</span>
+                          </div>
+                          {u.rol === 'conductor' && u.dni_conductor ? (
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              DNI: {u.dni_conductor} · Lic: {u.licencia_conductor || '—'} · SOAT: {u.soat_conductor || '—'}
+                            </p>
+                          ) : null}
                         </div>
                       ) : (
                         <span className="text-gray-400 italic">N/A</span>
@@ -320,17 +331,38 @@ export default function UsuariosPage() {
               </div>
 
               {editRol === 'conductor' && (
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
-                    Vehículo (Modelo / Placa / Color)
-                  </label>
-                  <input
-                    type="text"
-                    value={editVehiculo}
-                    onChange={(e) => setEditVehiculo(e.target.value)}
-                    placeholder="Toyota Yaris Blanco - ABC-123"
-                    className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                      Vehículo (Modelo / Placa / Color)
+                    </label>
+                    <input
+                      type="text"
+                      value={editVehiculo}
+                      onChange={(e) => setEditVehiculo(e.target.value)}
+                      placeholder="Toyota Yaris Blanco - ABC-123"
+                      className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3.5 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {usuarioEditar.dni_conductor ||
+                  usuarioEditar.licencia_conductor ||
+                  usuarioEditar.soat_conductor ? (
+                    <div className="rounded-xl bg-gray-900/70 border border-gray-800 p-3 text-xs space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                        Documentación KYC ({usuarioEditar.estado_documentos || 'registrada'})
+                      </p>
+                      <p className="text-gray-300">
+                        DNI: <span className="font-mono text-white">{usuarioEditar.dni_conductor || '—'}</span>
+                      </p>
+                      <p className="text-gray-300">
+                        Licencia: <span className="font-mono text-white">{usuarioEditar.licencia_conductor || '—'}</span>
+                      </p>
+                      <p className="text-gray-300">
+                        SOAT: <span className="font-mono text-white">{usuarioEditar.soat_conductor || '—'}</span>
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               )}
 

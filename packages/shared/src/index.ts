@@ -10,7 +10,12 @@ export { authRepository } from './data/auth.repository';
 export { viajesRepository } from './data/viajes.repository';
 
 // Utilidades
-export { calcularDistanciaHaversine } from './utils/geo';
+export {
+  calcularDistanciaHaversine,
+  extraerCoordenadasPerfil,
+  formatearReferenciaHuancavelica,
+  obtenerDireccionLegible,
+} from './utils/geo';
 
 // Capa de presentación reutilizable
 export { Button } from './ui/Button';

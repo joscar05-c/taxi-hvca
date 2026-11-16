@@ -24,6 +24,12 @@ export const PUNTOS_SIMULACION_HVCA = [
 
 export type PuntoSimulacionHvca = (typeof PUNTOS_SIMULACION_HVCA)[number];
 
+export type EstadoDocumentosConductor =
+  | 'pendiente'
+  | 'en_revision'
+  | 'aprobado'
+  | 'rechazado';
+
 /**
  * Perfil de usuario en Cloud Firestore (`perfiles/{uid}`).
  * El campo `id` se vincula 1:1 con el UID de Firebase Authentication.
@@ -37,10 +43,17 @@ export type Profile = {
   email?: string | null;
   foto_url?: string | null;
   calificacion_promedio: number;
+  total_calificaciones?: number;
   estado: RiderStatus;
   esta_conectado: boolean;
   ubicacion_actual: string | null;
+  ubicacion_lat?: number | null;
+  ubicacion_lng?: number | null;
   vehiculo: string | null;
+  dni_conductor?: string | null;
+  licencia_conductor?: string | null;
+  soat_conductor?: string | null;
+  estado_documentos?: EstadoDocumentosConductor;
   created_at: string;
   updated_at: string;
 };
@@ -89,10 +102,16 @@ export type SolicitudViaje = {
   origen_lng: number;
   destino_lat: number;
   destino_lng: number;
+  origen_direccion?: string | null;
+  destino_direccion?: string | null;
+  distancia_km?: number | null;
   precio_inicial: number;
   estado: SolicitudEstado;
   conductor_id: string | null;
   precio_final: number | null;
+  calificacion_conductor?: number | null;
+  calificacion_pasajero?: number | null;
+  comentario_calificacion?: string | null;
   created_at: string;
 };
 
@@ -102,6 +121,22 @@ export type OfertaConductor = {
   solicitud_id: string;
   conductor_id: string;
   precio: number;
+  conductor_nombre?: string;
+  conductor_vehiculo?: string | null;
+  conductor_calificacion?: number;
+  conductor_telefono?: string;
+  created_at: string;
+};
+
+/** Registro de calificación mutua al finalizar un viaje. */
+export type CalificacionViaje = {
+  id: string;
+  solicitud_id: string;
+  evaluador_id: string;
+  evaluado_id: string;
+  rol_evaluador: UserRole;
+  estrellas: number;
+  comentario?: string | null;
   created_at: string;
 };
 

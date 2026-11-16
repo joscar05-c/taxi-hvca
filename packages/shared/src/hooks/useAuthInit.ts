@@ -9,7 +9,7 @@ import { useAuthStore } from '../store/useAuthStore';
  * Inicializa la autenticación al montar la app y la mantiene sincronizada con Firebase Auth.
  * Sin estado local: todo se escribe directamente en `useAuthStore` (SSOT).
  * - Se suscribe a `onAuthStateChanged()` para reflejar cada cambio en el store.
- * - Recupera el perfil del usuario desde Firestore (`perfiles/{uid}`).
+ * - Se suscribe en tiempo real al perfil del usuario en Firestore (`perfiles/{uid}`).
  * Colocar una sola vez en el root de la app (ej. `_layout.tsx`).
  */
 export function useAuthInit(): void {
@@ -18,34 +18,46 @@ export function useAuthInit(): void {
 
   useEffect(() => {
     let activo = true;
+    let unsubscribePerfil: (() => void) | null = null;
 
-    async function sincronizarUsuario(firebaseUser: FirebaseUser | null) {
-      if (!activo) return;
-      setSession(firebaseUser);
-
-      if (!firebaseUser) {
-        setPerfil(null);
-        return;
-      }
-
-      try {
-        const perfil = await authRepository.obtenerPerfil(firebaseUser.uid);
-        if (activo) setPerfil(perfil);
-      } catch (e) {
-        if (activo) {
-          console.warn('No se pudo cargar el perfil de Firestore:', e);
-          setPerfil(null);
-        }
+    function limpiarSuscripcionPerfil() {
+      if (unsubscribePerfil) {
+        unsubscribePerfil();
+        unsubscribePerfil = null;
       }
     }
 
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      void sincronizarUsuario(firebaseUser);
-    });
+    const unsubscribeAuth = onAuthStateChanged(
+      auth,
+      (firebaseUser: FirebaseUser | null) => {
+        if (!activo) return;
+        limpiarSuscripcionPerfil();
+        setSession(firebaseUser);
+
+        if (!firebaseUser) {
+          setPerfil(null);
+          return;
+        }
+
+        unsubscribePerfil = authRepository.suscribirPerfil(
+          firebaseUser.uid,
+          (perfil) => {
+            if (activo) setPerfil(perfil);
+          },
+          (e) => {
+            if (activo) {
+              console.warn('No se pudo cargar el perfil de Firestore:', e);
+              setPerfil(null);
+            }
+          },
+        );
+      },
+    );
 
     return () => {
       activo = false;
-      unsubscribe();
+      limpiarSuscripcionPerfil();
+      unsubscribeAuth();
     };
   }, [setSession, setPerfil]);
 }
