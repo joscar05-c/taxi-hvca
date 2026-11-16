@@ -12,6 +12,7 @@
     "start:conductor": "npm run start -w app-conductor",
     "android:pasajero": "npm run android -w app-pasajero",
     "android:conductor": "npm run android -w app-conductor",
+    "android:clean": "node -e \"const cp=require('child_process'),fs=require('fs'),path=require('path');for(const g of ['apps/app-pasajero/android/gradlew.bat','apps/app-conductor/android/gradlew.bat']){const full=path.resolve(g);if(fs.existsSync(full)){try{cp.execSync('\\\"'+full+'\\\" --stop',{stdio:'inherit'})}catch{}}}if(fs.existsSync('node_modules')){for(const e of fs.readdirSync('node_modules')){const p=e.startsWith('@')?fs.readdirSync(path.join('node_modules',e)).map(s=>path.join('node_modules',e,s)):[path.join('node_modules',e)];for(const pkg of p){const b=path.join(pkg,'android','build');if(fs.existsSync(b)){fs.rmSync(b,{recursive:true,force:true})}}}}\"",
     "ios:pasajero": "npm run ios -w app-pasajero",
     "ios:conductor": "npm run ios -w app-conductor",
     "dev:admin": "npm run dev -w panel-admin",
@@ -32,7 +33,9 @@
   "dependencies": {
     "firebase": "^13.1.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "expo": "~57.0.25",
+    "react-native": "0.86.3"
   },
   "overrides": {
     "react": "19.2.3",
