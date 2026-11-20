@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "scheme": ["app-pasajero", "com.joscar03.dev.apppasajero"],
+    "scheme": "app-pasajero",
     "experiments": {
       "typedRoutes": true
     },
@@ -41,7 +41,8 @@
       "expo-router",
       "expo-web-browser",
       "@react-native-google-signin/google-signin",
-      ["../../plugins/withShortCxxDir", { "subdir": "p" }]
+      ["../../plugins/withShortCxxDir", { "subdir": "p" }],
+      "../../plugins/withGoogleMapsApiKey"
     ]
   }
 }
