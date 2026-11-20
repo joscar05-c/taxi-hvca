@@ -24,6 +24,11 @@ export { BotonGoogle } from './ui/BotonGoogle';
 export type { BotonGoogleProps } from './ui/BotonGoogle';
 export { Input } from './ui/Input';
 export type { InputProps } from './ui/Input';
+export { OnboardingCarousel } from './ui/OnboardingCarousel';
+export type {
+  OnboardingCarouselProps,
+  OnboardingSlide,
+} from './ui/OnboardingCarousel';
 export { SeccionVerificacionTelefono } from './ui/SeccionVerificacionTelefono';
 export type { SeccionVerificacionTelefonoProps } from './ui/SeccionVerificacionTelefono';
 export { PantallaCentrada, Etiqueta, colores } from './ui/theme';
@@ -34,6 +39,8 @@ export type { UseAuthResult } from './hooks/useAuth';
 export { useAuthInit } from './hooks/useAuthInit';
 export { useGoogleLogin } from './hooks/useGoogleLogin';
 export type { UseGoogleLoginResult } from './hooks/useGoogleLogin';
+export { useOnboarding } from './hooks/useOnboarding';
+export type { UseOnboardingResult } from './hooks/useOnboarding';
 export { useLocation } from './hooks/useLocation';
 export type { UseLocationResult } from './hooks/useLocation';
 export { useForegroundLocation } from './hooks/useForegroundLocation';
