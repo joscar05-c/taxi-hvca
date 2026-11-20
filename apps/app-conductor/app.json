@@ -52,7 +52,8 @@
           "isIosBackgroundLocationEnabled": true
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      ["../../plugins/withShortCxxDir", { "subdir": "c" }]
     ],
     "extra": {
       "router": {},
