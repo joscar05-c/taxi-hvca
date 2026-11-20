@@ -23,6 +23,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="login" />
         <Stack.Screen name="registro" />
+        <Stack.Screen name="oauthredirect" />
         <Stack.Screen name="(tabs)" />
       </Stack>
     </>

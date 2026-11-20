@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "scheme": "app-pasajero",
+    "scheme": ["app-pasajero", "com.joscar03.dev.apppasajero"],
     "experiments": {
       "typedRoutes": true
     },
