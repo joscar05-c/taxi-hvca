@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 
@@ -12,19 +13,46 @@ export interface UseGoogleLoginResult {
   iniciarConGoogle: () => Promise<void>;
   cargando: boolean;
   error: string | null;
+  disponible: boolean;
 }
 
 export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLoginResult {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Solicitar id_token para Firebase Auth
+  const webClientId = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '').trim();
+  const androidClientId = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '').trim();
+  const iosClientId = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '').trim();
+
+  const clientIdPlataforma =
+    Platform.select({
+      android: androidClientId,
+      ios: iosClientId,
+      default: webClientId,
+    }) ?? '';
+
+  const variableRequerida =
+    Platform.select({
+      android: 'EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID',
+      ios: 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID',
+      default: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID',
+    }) ?? 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID';
+
+  const disponible = Boolean(clientIdPlataforma);
+
+  // Solicitar id_token para Firebase Auth; cadena vacía evita excepciones en render si falta .env
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+    webClientId,
+    androidClientId,
+    iosClientId,
   });
 
   useEffect(() => {
     async function procesarRespuesta() {
+      if (!disponible) {
+        return;
+      }
+
       if (response?.type === 'success') {
         const idToken = response.params.id_token;
         if (!idToken) {
@@ -51,17 +79,16 @@ export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLogin
     if (response) {
       void procesarRespuesta();
     }
-  }, [response, rol]);
+  }, [response, rol, disponible]);
 
   async function iniciarConGoogle() {
     setError(null);
     setCargando(true);
 
-    const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-    if (!webClientId) {
+    if (!disponible) {
       setCargando(false);
       setError(
-        'Google Sign-In requiere configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID en el archivo .env.',
+        `Google Sign-In requiere configurar ${variableRequerida} en el archivo .env.`,
       );
       return;
     }
@@ -91,5 +118,6 @@ export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLogin
     iniciarConGoogle,
     cargando,
     error,
+    disponible,
   };
 }
