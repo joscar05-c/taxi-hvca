@@ -53,6 +53,7 @@
         }
       ],
       "expo-web-browser",
+      "@react-native-google-signin/google-signin",
       ["../../plugins/withShortCxxDir", { "subdir": "c" }]
     ],
     "extra": {
