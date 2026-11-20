@@ -11,7 +11,9 @@ export { viajesRepository } from './data/viajes.repository';
 
 // Utilidades
 export {
+  avanzarHaciaDestino,
   calcularDistanciaHaversine,
+  estaFueraDeHuancavelica,
   extraerCoordenadasPerfil,
   formatearReferenciaHuancavelica,
   obtenerDireccionLegible,
@@ -44,7 +46,10 @@ export type { UseOnboardingResult } from './hooks/useOnboarding';
 export { useLocation } from './hooks/useLocation';
 export type { UseLocationResult } from './hooks/useLocation';
 export { useForegroundLocation } from './hooks/useForegroundLocation';
-export type { ForegroundLocationResult } from './hooks/useForegroundLocation';
+export type {
+  ForegroundLocationOptions,
+  ForegroundLocationResult,
+} from './hooks/useForegroundLocation';
 export { useBackgroundLocation } from './hooks/useBackgroundLocation';
 export type { UseBackgroundLocationResult } from './hooks/useBackgroundLocation';
 

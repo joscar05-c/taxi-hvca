@@ -11,15 +11,20 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 
+import * as Location from 'expo-location';
+
 import {
   Button,
   Input,
   authRepository,
+  avanzarHaciaDestino,
   calcularDistanciaHaversine,
   colores,
+  estaFueraDeHuancavelica,
   extraerCoordenadasPerfil,
   formatearReferenciaHuancavelica,
   HUANCAVELICA_CENTRO,
+  obtenerDireccionLegible,
   PUNTOS_SIMULACION_HVCA,
   useAuth,
   useBackgroundLocation,
@@ -74,7 +79,25 @@ export default function PantallaInicio() {
   const { perfil, sesion, cerrarSesion } = useAuth();
   const { isTracking, loading, error: errorTracking, startTracking, stopTracking } =
     useBackgroundLocation(BACKGROUND_LOCATION_TASK);
-  const { coords, requestPermissionAndLocate } = useForegroundLocation();
+  const { coords, watching, requestPermissionAndLocate } = useForegroundLocation({
+    watch: true,
+    accuracy: Location.Accuracy.High,
+    distanceInterval: 10,
+    timeInterval: 4000,
+  });
+
+  const mapRef = useRef<MapView | null>(null);
+  const ultimoDirCoordsRef = useRef<Coordenadas | null>(null);
+  const ultimoEnvioUbicacionRef = useRef<{
+    latitude: number;
+    longitude: number;
+    timestamp: number;
+  } | null>(null);
+  const indiceRutaSimRef = useRef(1);
+
+  const [direccionConductor, setDireccionConductor] = useState<string | null>(null);
+  const [cargandoDireccion, setCargandoDireccion] = useState(false);
+  const [seguirEnMapa, setSeguirEnMapa] = useState(true);
 
   const [operando, setOperando] = useState(false);
   const [mensaje, setMensaje] = useState<string | null>(null);
@@ -132,19 +155,15 @@ export default function PantallaInicio() {
 
   // Modo simulación Huancavelica para desarrollo y emuladores
   const [simularHuancavelica, setSimularHuancavelica] = useState(false);
+  const [simulandoMovimiento, setSimulandoMovimiento] = useState(false);
   const [puntoSimulado, setPuntoSimulado] = useState<PuntoSimulacionHvca>(
     PUNTOS_SIMULACION_HVCA[0],
   );
+  const [posicionSimulada, setPosicionSimulada] = useState<Coordenadas | null>(null);
 
   const esEmuladorFueraDeHvca = useMemo(() => {
     if (!coords) return false;
-    const d = calcularDistanciaHaversine(
-      coords.latitude,
-      coords.longitude,
-      HUANCAVELICA_CENTRO.latitude,
-      HUANCAVELICA_CENTRO.longitude,
-    );
-    return d > 100;
+    return estaFueraDeHuancavelica(coords);
   }, [coords]);
 
   useEffect(() => {
@@ -155,23 +174,219 @@ export default function PantallaInicio() {
 
   const ubicacionConductor = useMemo<Coordenadas | null>(() => {
     if (simularHuancavelica) {
+      if (simulandoMovimiento && posicionSimulada) {
+        return posicionSimulada;
+      }
       return { latitude: puntoSimulado.latitude, longitude: puntoSimulado.longitude };
     }
     if (coords) {
       return { latitude: coords.latitude, longitude: coords.longitude };
     }
     return extraerCoordenadasPerfil(perfil);
-  }, [simularHuancavelica, puntoSimulado, coords, perfil]);
+  }, [simularHuancavelica, simulandoMovimiento, posicionSimulada, puntoSimulado, coords, perfil]);
 
-  // En modo simulación conectado, persistimos el punto simulado para que el pasajero lo vea en vivo
+  // Solicitar ubicación inmediatamente al abrir la app para mostrar mapa y dirección exacta
   useEffect(() => {
-    if (!idConductor || !simularHuancavelica || (!isTracking && !viajeActivo)) {
+    void requestPermissionAndLocate();
+  }, [requestPermissionAndLocate]);
+
+  // Dirección legible en vivo según desplazamiento (GPS real o simulador)
+  useEffect(() => {
+    if (!ubicacionConductor) {
+      setDireccionConductor(null);
       return;
     }
+
+    const ultima = ultimoDirCoordsRef.current;
+    if (
+      ultima &&
+      calcularDistanciaHaversine(
+        ultima.latitude,
+        ultima.longitude,
+        ubicacionConductor.latitude,
+        ubicacionConductor.longitude,
+      ) < 0.025
+    ) {
+      return;
+    }
+
+    let activo = true;
+    setCargandoDireccion(true);
+    const timer = setTimeout(() => {
+      void obtenerDireccionLegible(ubicacionConductor)
+        .then((dir) => {
+          if (!activo) return;
+          ultimoDirCoordsRef.current = ubicacionConductor;
+          setDireccionConductor(dir);
+        })
+        .finally(() => {
+          if (activo) {
+            setCargandoDireccion(false);
+          }
+        });
+    }, 400);
+
+    return () => {
+      activo = false;
+      clearTimeout(timer);
+    };
+  }, [ubicacionConductor]);
+
+  // En primer plano sincronizamos con Firestore (con throttling) la ubicación activa mientras está conectado o en viaje
+  useEffect(() => {
+    if (!idConductor || !ubicacionConductor || (!isTracking && !viajeActivo)) {
+      return;
+    }
+
+    const ahora = Date.now();
+    const previo = ultimoEnvioUbicacionRef.current;
+    if (previo) {
+      const transcurridoMs = ahora - previo.timestamp;
+      if (transcurridoMs < 3500) return;
+      const distanciaKm = calcularDistanciaHaversine(
+        previo.latitude,
+        previo.longitude,
+        ubicacionConductor.latitude,
+        ubicacionConductor.longitude,
+      );
+      if (distanciaKm < 0.015 && transcurridoMs < 15000) {
+        return;
+      }
+    }
+
+    ultimoEnvioUbicacionRef.current = {
+      latitude: ubicacionConductor.latitude,
+      longitude: ubicacionConductor.longitude,
+      timestamp: ahora,
+    };
     void authRepository
-      .actualizarUbicacion(puntoSimulado.latitude, puntoSimulado.longitude)
-      .catch(() => undefined);
-  }, [idConductor, simularHuancavelica, puntoSimulado, isTracking, viajeActivo]);
+      .actualizarUbicacion(
+        ubicacionConductor.latitude,
+        ubicacionConductor.longitude,
+      )
+      .catch(() => {
+        ultimoEnvioUbicacionRef.current = previo;
+      });
+  }, [idConductor, ubicacionConductor, isTracking, viajeActivo]);
+
+  const objetivoSimulacionRef = useRef<Coordenadas | null>(null);
+  useEffect(() => {
+    if (viajeActivo) {
+      objetivoSimulacionRef.current =
+        viajeActivo.estado === 'en_curso'
+          ? { latitude: viajeActivo.destino_lat, longitude: viajeActivo.destino_lng }
+          : { latitude: viajeActivo.origen_lat, longitude: viajeActivo.origen_lng };
+    } else if (solicitudesCercanas[0]) {
+      objetivoSimulacionRef.current = {
+        latitude: solicitudesCercanas[0].solicitud.origen_lat,
+        longitude: solicitudesCercanas[0].solicitud.origen_lng,
+      };
+    } else {
+      objetivoSimulacionRef.current = null;
+    }
+  }, [viajeActivo, solicitudesCercanas]);
+
+  // Simulador de desplazamiento continuo en Huancavelica para pruebas en emulador
+  useEffect(() => {
+    if (!simularHuancavelica || !simulandoMovimiento) {
+      return;
+    }
+
+    setPosicionSimulada((prev) =>
+      prev ?? { latitude: puntoSimulado.latitude, longitude: puntoSimulado.longitude },
+    );
+
+    const intervalo = setInterval(() => {
+      setPosicionSimulada((actual) => {
+        const base = actual ?? {
+          latitude: puntoSimulado.latitude,
+          longitude: puntoSimulado.longitude,
+        };
+        let objetivo = objetivoSimulacionRef.current;
+
+        if (!objetivo) {
+          const lista = PUNTOS_SIMULACION_HVCA;
+          let puntoObjetivo = lista[indiceRutaSimRef.current % lista.length];
+          const dist = calcularDistanciaHaversine(
+            base.latitude,
+            base.longitude,
+            puntoObjetivo.latitude,
+            puntoObjetivo.longitude,
+          );
+          if (dist <= 0.09) {
+            indiceRutaSimRef.current = (indiceRutaSimRef.current + 1) % lista.length;
+            puntoObjetivo = lista[indiceRutaSimRef.current];
+          }
+          objetivo = {
+            latitude: puntoObjetivo.latitude,
+            longitude: puntoObjetivo.longitude,
+          };
+        }
+
+        return avanzarHaciaDestino(base, objetivo, 0.08);
+      });
+    }, 2500);
+
+    return () => clearInterval(intervalo);
+  }, [simularHuancavelica, simulandoMovimiento, puntoSimulado]);
+
+  // Seguir suavemente al conductor en el mapa mientras seguirEnMapa esté activo
+  useEffect(() => {
+    if (!seguirEnMapa || !ubicacionConductor || !mapRef.current) {
+      return;
+    }
+    mapRef.current.animateToRegion(
+      {
+        latitude: ubicacionConductor.latitude,
+        longitude: ubicacionConductor.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      },
+      450,
+    );
+  }, [seguirEnMapa, ubicacionConductor]);
+
+  // Asegurar permiso fresco también al conectarse si fue denegado inicialmente
+  useEffect(() => {
+    if (isTracking) {
+      void requestPermissionAndLocate();
+    }
+  }, [isTracking, requestPermissionAndLocate]);
+
+  function encuadrarRutaViaje() {
+    if (!viajeActivo || !mapRef.current) return;
+    setSeguirEnMapa(false);
+    const puntos: Coordenadas[] = [
+      { latitude: viajeActivo.origen_lat, longitude: viajeActivo.origen_lng },
+      { latitude: viajeActivo.destino_lat, longitude: viajeActivo.destino_lng },
+    ];
+    if (ubicacionConductor) {
+      puntos.push(ubicacionConductor);
+    }
+    mapRef.current.fitToCoordinates(puntos, {
+      edgePadding: { top: 50, right: 40, bottom: 50, left: 40 },
+      animated: true,
+    });
+  }
+
+  function alternarSeguirConductor() {
+    if (seguirEnMapa) {
+      setSeguirEnMapa(false);
+      return;
+    }
+    setSeguirEnMapa(true);
+    if (ubicacionConductor && mapRef.current) {
+      mapRef.current.animateToRegion(
+        {
+          latitude: ubicacionConductor.latitude,
+          longitude: ubicacionConductor.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        },
+        450,
+      );
+    }
+  }
 
   const solicitudesPendientesRef = useRef<Map<string, SolicitudViaje>>(new Map());
   const ubicacionRef = useRef(ubicacionConductor);
@@ -197,12 +412,6 @@ export default function PantallaInicio() {
     ubicacionRef.current = ubicacionConductor;
     recalcularCercanas(ubicacionConductor);
   }, [ubicacionConductor, recalcularCercanas]);
-
-  useEffect(() => {
-    if (isTracking) {
-      void requestPermissionAndLocate();
-    }
-  }, [isTracking, requestPermissionAndLocate]);
 
   const manejarNuevaSolicitud = useCallback((solicitud: SolicitudViaje) => {
     solicitudesPendientesRef.current.set(solicitud.id, solicitud);
@@ -629,6 +838,150 @@ export default function PantallaInicio() {
         <Text style={styles.nombre}>{perfil?.nombre ?? 'Conductor'}</Text>
       </View>
 
+      {/* Mapa en vivo con dirección exacta y desplazamientos del conductor */}
+      <View style={styles.cardMapaVivo}>
+        <View style={styles.cabeceraMapaVivo}>
+          <View style={styles.filaEstadoEnVivo}>
+            <Text style={styles.tituloMapaVivo}>📍 Tu ubicación actual</Text>
+            {(watching || simulandoMovimiento || isTracking) && (
+              <View style={styles.badgeEnVivo}>
+                <Text style={styles.textoBadgeEnVivo}>
+                  {simulandoMovimiento ? 'SIMULADO EN VIVO' : 'GPS EN VIVO'}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.direccionExactaTexto} numberOfLines={2}>
+            {ubicacionConductor
+              ? cargandoDireccion && !direccionConductor
+                ? 'Obteniendo dirección exacta...'
+                : direccionConductor ??
+                  formatearReferenciaHuancavelica(ubicacionConductor)
+              : 'Esperando señal GPS...'}
+          </Text>
+        </View>
+
+        <View style={styles.contenedorMapaVivo}>
+          <MapView
+            ref={mapRef}
+            style={styles.mapaVivo}
+            initialRegion={{
+              latitude: ubicacionConductor?.latitude ?? HUANCAVELICA_CENTRO.latitude,
+              longitude: ubicacionConductor?.longitude ?? HUANCAVELICA_CENTRO.longitude,
+              latitudeDelta: 0.012,
+              longitudeDelta: 0.012,
+            }}
+            showsUserLocation={Boolean(coords && !esEmuladorFueraDeHvca)}
+            showsMyLocationButton={false}
+            onPanDrag={() => {
+              if (seguirEnMapa) setSeguirEnMapa(false);
+            }}
+          >
+            {ubicacionConductor ? (
+              <Marker
+                coordinate={ubicacionConductor}
+                title="🚕 Tú"
+                description={direccionConductor ?? 'Tu ubicación actual'}
+                pinColor="#F59E0B"
+              />
+            ) : null}
+
+            {viajeActivo ? (
+              <>
+                <Marker
+                  coordinate={{
+                    latitude: viajeActivo.origen_lat,
+                    longitude: viajeActivo.origen_lng,
+                  }}
+                  title="Origen pasajero"
+                  description={viajeActivo.origen_direccion ?? 'Punto de recogida'}
+                  pinColor="#16A34A"
+                />
+                <Marker
+                  coordinate={{
+                    latitude: viajeActivo.destino_lat,
+                    longitude: viajeActivo.destino_lng,
+                  }}
+                  title="Destino"
+                  description={viajeActivo.destino_direccion ?? 'Punto de llegada'}
+                  pinColor="#DC2626"
+                />
+                <Polyline
+                  coordinates={[
+                    {
+                      latitude: viajeActivo.origen_lat,
+                      longitude: viajeActivo.origen_lng,
+                    },
+                    {
+                      latitude: viajeActivo.destino_lat,
+                      longitude: viajeActivo.destino_lng,
+                    },
+                  ]}
+                  strokeColor={colores.primario}
+                  strokeWidth={4}
+                />
+                {ubicacionConductor &&
+                (viajeActivo.estado === 'aceptado' ||
+                  viajeActivo.estado === 'en_camino_origen') ? (
+                  <Polyline
+                    coordinates={[
+                      ubicacionConductor,
+                      {
+                        latitude: viajeActivo.origen_lat,
+                        longitude: viajeActivo.origen_lng,
+                      },
+                    ]}
+                    strokeColor="#F59E0B"
+                    strokeWidth={3}
+                    lineDashPattern={[6, 4]}
+                  />
+                ) : null}
+              </>
+            ) : (
+              solicitudesCercanas.map(({ solicitud, distanciaKm }) => (
+                <Marker
+                  key={solicitud.id}
+                  coordinate={{
+                    latitude: solicitud.origen_lat,
+                    longitude: solicitud.origen_lng,
+                  }}
+                  title={`Pasajero · ${distanciaKm.toFixed(1)} km`}
+                  description={solicitud.origen_direccion ?? 'Solicitud cercana'}
+                  pinColor="#16A34A"
+                />
+              ))
+            )}
+          </MapView>
+
+          <View style={styles.filaControlesMapa}>
+            {viajeActivo ? (
+              <Pressable
+                style={styles.botonMapaFlotante}
+                onPress={encuadrarRutaViaje}
+              >
+                <Text style={styles.textoBotonMapaFlotante}>🗺️ Ruta</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              style={[
+                styles.botonMapaFlotante,
+                seguirEnMapa && styles.botonMapaFlotanteActivo,
+              ]}
+              onPress={alternarSeguirConductor}
+            >
+              <Text
+                style={[
+                  styles.textoBotonMapaFlotante,
+                  seguirEnMapa && styles.textoBotonMapaFlotanteActivo,
+                ]}
+              >
+                {seguirEnMapa ? '🎯 Siguiendo' : '🎯 Centrar'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+
       <View style={styles.central}>
         <View style={styles.tarjeta}>
           <View
@@ -680,13 +1033,19 @@ export default function PantallaInicio() {
             <Text style={styles.tituloSimulador}>📍 Simulación Huancavelica</Text>
             <Text style={styles.descripcionSimulador}>
               {simularHuancavelica
-                ? `${puntoSimulado.nombre} (${puntoSimulado.latitude.toFixed(4)}, ${puntoSimulado.longitude.toFixed(4)})`
+                ? `${puntoSimulado.nombre} (${(ubicacionConductor?.latitude ?? puntoSimulado.latitude).toFixed(4)}, ${(ubicacionConductor?.longitude ?? puntoSimulado.longitude).toFixed(4)})`
                 : 'Ubicación GPS de tu dispositivo'}
             </Text>
           </View>
           <Switch
             value={simularHuancavelica}
-            onValueChange={setSimularHuancavelica}
+            onValueChange={(valor) => {
+              setSimularHuancavelica(valor);
+              if (!valor) {
+                setSimulandoMovimiento(false);
+                setPosicionSimulada(null);
+              }
+            }}
             trackColor={{ false: '#D1D5DB', true: colores.primario }}
             thumbColor={simularHuancavelica ? '#ffffff' : '#f4f3f4'}
           />
@@ -710,7 +1069,10 @@ export default function PantallaInicio() {
                   <Pressable
                     key={p.id}
                     style={[styles.chipPunto, seleccionado && styles.chipPuntoActivo]}
-                    onPress={() => setPuntoSimulado(p)}
+                    onPress={() => {
+                      setPuntoSimulado(p);
+                      setPosicionSimulada(null);
+                    }}
                   >
                     <Text
                       style={[styles.textoChip, seleccionado && styles.textoChipActivo]}
@@ -721,6 +1083,25 @@ export default function PantallaInicio() {
                 );
               })}
             </View>
+
+            <Pressable
+              style={[
+                styles.botonSimularMovimiento,
+                simulandoMovimiento && styles.botonSimularMovimientoActivo,
+              ]}
+              onPress={() => setSimulandoMovimiento((prev) => !prev)}
+            >
+              <Text
+                style={[
+                  styles.textoSimularMovimiento,
+                  simulandoMovimiento && styles.textoSimularMovimientoActivo,
+                ]}
+              >
+                {simulandoMovimiento
+                  ? '⏸️ Detener movimiento simulado'
+                  : '▶️ Simular movimiento en vivo'}
+              </Text>
+            </Pressable>
           </View>
         )}
       </View>
@@ -783,55 +1164,24 @@ export default function PantallaInicio() {
               {etiquetaEstadoViaje(viajeActivo.estado)}
             </Text>
 
-            {/* Mapa compacto del viaje */}
-            <View style={styles.mapaCompactoContenedor}>
-              <MapView
-                style={styles.mapaCompacto}
-                initialRegion={{
-                  latitude: viajeActivo.origen_lat,
-                  longitude: viajeActivo.origen_lng,
-                  latitudeDelta: 0.02,
-                  longitudeDelta: 0.02,
-                }}
-              >
-                <Marker
-                  coordinate={{
+            {/* Resumen de ruta visible en el mapa superior */}
+            <View style={styles.cajaRutaViaje}>
+              <Text style={styles.textoRutaViaje} numberOfLines={1}>
+                🟢 Recojo:{' '}
+                {viajeActivo.origen_direccion ??
+                  formatearReferenciaHuancavelica({
                     latitude: viajeActivo.origen_lat,
                     longitude: viajeActivo.origen_lng,
-                  }}
-                  title="Origen"
-                  pinColor="#16A34A"
-                />
-                <Marker
-                  coordinate={{
+                  })}
+              </Text>
+              <Text style={styles.textoRutaViaje} numberOfLines={1}>
+                🔴 Destino:{' '}
+                {viajeActivo.destino_direccion ??
+                  formatearReferenciaHuancavelica({
                     latitude: viajeActivo.destino_lat,
                     longitude: viajeActivo.destino_lng,
-                  }}
-                  title="Destino"
-                  pinColor="#DC2626"
-                />
-                {ubicacionConductor ? (
-                  <Marker
-                    coordinate={ubicacionConductor}
-                    title="Tu ubicación"
-                    pinColor="#F59E0B"
-                  />
-                ) : null}
-                <Polyline
-                  coordinates={[
-                    {
-                      latitude: viajeActivo.origen_lat,
-                      longitude: viajeActivo.origen_lng,
-                    },
-                    {
-                      latitude: viajeActivo.destino_lat,
-                      longitude: viajeActivo.destino_lng,
-                    },
-                  ]}
-                  strokeColor={colores.primario}
-                  strokeWidth={4}
-                />
-              </MapView>
+                  })}
+              </Text>
             </View>
 
             {perfilPasajero ? (
@@ -1406,5 +1756,133 @@ const styles = StyleSheet.create({
     color: '#92400E',
     lineHeight: 16,
     textAlign: 'center',
+  },
+  cardMapaVivo: {
+    maxWidth: 420,
+    width: '100%',
+    alignSelf: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    backgroundColor: colores.fondo,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  cabeceraMapaVivo: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colores.borde,
+  },
+  filaEstadoEnVivo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 4,
+  },
+  tituloMapaVivo: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.textoSuave,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  badgeEnVivo: {
+    backgroundColor: '#DCFCE7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  textoBadgeEnVivo: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  direccionExactaTexto: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colores.texto,
+    lineHeight: 20,
+  },
+  contenedorMapaVivo: {
+    height: 220,
+    width: '100%',
+    position: 'relative',
+  },
+  mapaVivo: {
+    flex: 1,
+  },
+  filaControlesMapa: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  botonMapaFlotante: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  botonMapaFlotanteActivo: {
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
+  },
+  textoBotonMapaFlotante: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  textoBotonMapaFlotanteActivo: {
+    color: '#FFFFFF',
+  },
+  botonSimularMovimiento: {
+    marginTop: 12,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+  },
+  botonSimularMovimientoActivo: {
+    backgroundColor: '#1E3A8A',
+    borderColor: '#1E3A8A',
+  },
+  textoSimularMovimiento: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  textoSimularMovimientoActivo: {
+    color: '#FFFFFF',
+  },
+  cajaRutaViaje: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+    gap: 4,
+  },
+  textoRutaViaje: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colores.texto,
   },
 });
