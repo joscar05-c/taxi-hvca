@@ -21,6 +21,7 @@ out/
 **/android/build/
 **/android/.gradle/
 **/android/app/build/
+.cxx/
 test_prefab_output/
 
 # npm

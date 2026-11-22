@@ -12,7 +12,28 @@
           "package_name": "com.joscar03.dev.appconductor"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "44228988408-8hh6gvdluu2gtf9kf8r5por2rgv5qsvp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joscar03.dev.appconductor",
+            "certificate_hash": "23dfa4463ea5dac25026d2a2472bb123a97d42a0"
+          }
+        },
+        {
+          "client_id": "44228988408-a14g8uafq13nbao9m7pe2kc3a2vmc53c.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joscar03.dev.appconductor",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "44228988408-eiba0m3fmf0pnl20vrs7jlgednte8nb7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBFpfwlzAl48viuBWzhc4pm82Hy_3srShc"
@@ -20,7 +41,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "44228988408-eiba0m3fmf0pnl20vrs7jlgednte8nb7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "44228988408-3oln8a6cntphg0unjlaahi0e9biektm5.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.joscar03.dev.apppasajero"
+              }
+            }
+          ]
         }
       }
     },
@@ -31,7 +64,28 @@
           "package_name": "com.joscar03.dev.apppasajero"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "44228988408-cj54vne2als5k4v0sic1q9p4uss5im7c.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joscar03.dev.apppasajero",
+            "certificate_hash": "23dfa4463ea5dac25026d2a2472bb123a97d42a0"
+          }
+        },
+        {
+          "client_id": "44228988408-i3q3olqqe24f8oe09t5ilodu06v0l4rn.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.joscar03.dev.apppasajero",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "44228988408-eiba0m3fmf0pnl20vrs7jlgednte8nb7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBFpfwlzAl48viuBWzhc4pm82Hy_3srShc"
@@ -39,7 +93,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "44228988408-eiba0m3fmf0pnl20vrs7jlgednte8nb7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "44228988408-3oln8a6cntphg0unjlaahi0e9biektm5.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.joscar03.dev.apppasajero"
+              }
+            }
+          ]
         }
       }
     }

@@ -39,7 +39,10 @@
     },
     "plugins": [
       "expo-router",
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin",
+      ["../../plugins/withShortCxxDir", { "subdir": "p" }],
+      "../../plugins/withGoogleMapsApiKey"
     ]
   }
 }

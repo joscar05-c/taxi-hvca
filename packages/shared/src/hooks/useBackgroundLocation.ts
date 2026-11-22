@@ -58,9 +58,16 @@ export function useBackgroundLocation(
       const iniciado = await Location.hasStartedLocationUpdatesAsync(taskName);
       if (!iniciado) {
         await Location.startLocationUpdatesAsync(taskName, {
-          accuracy: Location.Accuracy.Balanced,
-          distanceInterval: 10,
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 15,
+          timeInterval: 5000,
           deferredUpdatesInterval: 5000,
+          foregroundService: {
+            notificationTitle: 'Taxi HVCA Conductor activo',
+            notificationBody:
+              'Compartiendo tu ubicación para viajes y solicitudes cercanas.',
+            notificationColor: '#1A3A8F',
+          },
         });
       }
 

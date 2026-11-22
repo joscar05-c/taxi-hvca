@@ -1,6 +1,11 @@
 import * as Location from 'expo-location';
 
-import { PUNTOS_SIMULACION_HVCA, type Coordenadas, type Profile } from '../domain/types';
+import {
+  HUANCAVELICA_CENTRO,
+  PUNTOS_SIMULACION_HVCA,
+  type Coordenadas,
+  type Profile,
+} from '../domain/types';
 
 const RADIO_TIERRA_KM = 6371;
 
@@ -83,7 +88,67 @@ export function formatearReferenciaHuancavelica(coords: Coordenadas): string {
  * Resuelve una dirección legible mediante geocodificación inversa de Expo Location,
  * con fallback automático a la referencia local en Huancavelica.
  */
+const EXPRESION_PLUS_CODE = /^[A-Z0-9]{4,8}\+[A-Z0-9]{2,4}$/i;
+const CACHE_DIRECCIONES_MAX = 40;
+const CACHE_RADIO_KM = 0.03;
+
+const cacheDirecciones: Array<{ coords: Coordenadas; direccion: string }> = [];
+
+/**
+ * Indica si unas coordenadas están fuera del área operativa de Huancavelica.
+ */
+export function estaFueraDeHuancavelica(
+  coords: Coordenadas,
+  radioKm = 100,
+): boolean {
+  const distanciaKm = calcularDistanciaHaversine(
+    coords.latitude,
+    coords.longitude,
+    HUANCAVELICA_CENTRO.latitude,
+    HUANCAVELICA_CENTRO.longitude,
+  );
+  return distanciaKm > radioKm;
+}
+
+/**
+ * Avanza linealmente desde `desde` hacia `hacia` una distancia máxima `pasoKm`.
+ */
+export function avanzarHaciaDestino(
+  desde: Coordenadas,
+  hacia: Coordenadas,
+  pasoKm = 0.08,
+): Coordenadas {
+  const distancia = calcularDistanciaHaversine(
+    desde.latitude,
+    desde.longitude,
+    hacia.latitude,
+    hacia.longitude,
+  );
+  if (distancia <= pasoKm || distancia === 0) {
+    return { latitude: hacia.latitude, longitude: hacia.longitude };
+  }
+
+  const ratio = pasoKm / distancia;
+  return {
+    latitude: desde.latitude + (hacia.latitude - desde.latitude) * ratio,
+    longitude: desde.longitude + (hacia.longitude - desde.longitude) * ratio,
+  };
+}
+
 export async function obtenerDireccionLegible(coords: Coordenadas): Promise<string> {
+  const enCache = cacheDirecciones.find(
+    (item) =>
+      calcularDistanciaHaversine(
+        coords.latitude,
+        coords.longitude,
+        item.coords.latitude,
+        item.coords.longitude,
+      ) <= CACHE_RADIO_KM,
+  );
+  if (enCache) {
+    return enCache.direccion;
+  }
+
   try {
     const resultados = await Location.reverseGeocodeAsync({
       latitude: coords.latitude,
@@ -95,14 +160,31 @@ export async function obtenerDireccionLegible(coords: Coordenadas): Promise<stri
         .filter(Boolean)
         .join(' ')
         .trim();
-      const zona = primer.district || primer.subregion || primer.city;
-      const partes = [
-        calleCompleta || primer.name || null,
-        zona || null,
-      ].filter((p): p is string => Boolean(p && p.trim().length > 0));
+      const nombreLimpio =
+        primer.name && !EXPRESION_PLUS_CODE.test(primer.name.trim())
+          ? primer.name.trim()
+          : '';
+      const zona = (primer.district || primer.subregion || primer.city || '').trim();
+      const calleBase = calleCompleta || nombreLimpio;
+
+      const partes: string[] = [];
+      if (calleBase) {
+        partes.push(calleBase);
+      }
+      if (zona && (!calleBase || !calleBase.toLowerCase().includes(zona.toLowerCase()))) {
+        partes.push(zona);
+      }
 
       if (partes.length > 0) {
-        return partes.join(', ');
+        const direccion = partes.join(', ');
+        if (cacheDirecciones.length >= CACHE_DIRECCIONES_MAX) {
+          cacheDirecciones.shift();
+        }
+        cacheDirecciones.push({
+          coords: { latitude: coords.latitude, longitude: coords.longitude },
+          direccion,
+        });
+        return direccion;
       }
     }
   } catch {

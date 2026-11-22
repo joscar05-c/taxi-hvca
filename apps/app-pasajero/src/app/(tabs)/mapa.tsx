@@ -22,6 +22,7 @@ import {
   calcularDistanciaHaversine,
   calcularTarifa,
   colores,
+  estaFueraDeHuancavelica,
   extraerCoordenadasPerfil,
   formatearReferenciaHuancavelica,
   HUANCAVELICA_CENTRO,
@@ -69,8 +70,26 @@ export default function PantallaMapa() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { perfil, sesion, cerrarSesion } = useAuth();
-  const { coords, loading, error: errorUbicacion, requestPermissionAndLocate } =
-    useForegroundLocation();
+  const {
+    coords,
+    status: gpsStatus,
+    loading: gpsLoading,
+    error: errorUbicacion,
+    requestPermissionAndLocate,
+  } = useForegroundLocation({
+    watch: true,
+    distanceInterval: 15,
+    timeInterval: 5000,
+  });
+
+  const mapRef = useRef<MapView | null>(null);
+  const origenInicializadoRef = useRef(false);
+  const ultimoEncuadreRef = useRef<string | null>(null);
+
+  const [viajeVerificado, setViajeVerificado] = useState(false);
+  const [modoSeleccion, setModoSeleccion] = useState<'destino' | 'origen'>('destino');
+  const [direccionBajoPin, setDireccionBajoPin] = useState<string | null>(null);
+  const [cargandoDireccionPin, setCargandoDireccionPin] = useState(false);
 
   const [centroMapa, setCentroMapa] = useState<Coordenadas | null>(null);
   const [originCoords, setOriginCoords] = useState<Coordenadas | null>(null);
@@ -109,7 +128,10 @@ export default function PantallaMapa() {
 
   // Recuperación automática del viaje activo al abrir la app
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      setViajeVerificado(true);
+      return;
+    }
     let activo = true;
 
     async function recuperarViaje() {
@@ -125,6 +147,7 @@ export default function PantallaMapa() {
           latitude: activa.destino_lat,
           longitude: activa.destino_lng,
         };
+        origenInicializadoRef.current = true;
         setOriginCoords(orig);
         setDestinoCoords(dest);
         setOrigenDireccion(
@@ -142,6 +165,10 @@ export default function PantallaMapa() {
         }
       } catch (e) {
         console.warn('[mapa] Error al recuperar viaje activo:', e);
+      } finally {
+        if (activo) {
+          setViajeVerificado(true);
+        }
       }
     }
 
@@ -152,25 +179,77 @@ export default function PantallaMapa() {
   }, [userId]);
 
   useEffect(() => {
-    if (!centroMapa) {
-      if (coords) {
-        const d = calcularDistanciaHaversine(
-          coords.latitude,
-          coords.longitude,
-          HUANCAVELICA_CENTRO.latitude,
-          HUANCAVELICA_CENTRO.longitude,
-        );
-        // Si el dispositivo está a más de 100km (típico emulador en EE.UU.), centrar en Huancavelica
-        if (d < 100) {
-          setCentroMapa({ latitude: coords.latitude, longitude: coords.longitude });
-        } else {
-          setCentroMapa(HUANCAVELICA_CENTRO);
-        }
-      } else {
-        setCentroMapa(HUANCAVELICA_CENTRO);
-      }
+    if (!viajeVerificado || solicitud || viajeAceptado || origenInicializadoRef.current) {
+      return;
     }
-  }, [coords, centroMapa]);
+
+    if (coords) {
+      const fuera = estaFueraDeHuancavelica(coords);
+      const origenInicial: Coordenadas = fuera
+        ? HUANCAVELICA_CENTRO
+        : { latitude: coords.latitude, longitude: coords.longitude };
+
+      origenInicializadoRef.current = true;
+      setOriginCoords(origenInicial);
+      setCentroMapa(origenInicial);
+      setModoSeleccion('destino');
+      setOrigenDireccion(null);
+      void obtenerDireccionLegible(origenInicial).then(setOrigenDireccion);
+      mapRef.current?.animateToRegion(
+        {
+          ...origenInicial,
+          latitudeDelta: 0.012,
+          longitudeDelta: 0.012,
+        },
+        450,
+      );
+      return;
+    }
+
+    if (!gpsLoading && gpsStatus !== null) {
+      origenInicializadoRef.current = true;
+      setOriginCoords(HUANCAVELICA_CENTRO);
+      setCentroMapa(HUANCAVELICA_CENTRO);
+      setModoSeleccion('destino');
+      void obtenerDireccionLegible(HUANCAVELICA_CENTRO).then(setOrigenDireccion);
+    }
+  }, [viajeVerificado, solicitud, viajeAceptado, coords, gpsLoading, gpsStatus]);
+
+  const mostrandoPin =
+    Boolean(centroMapa) &&
+    !solicitud &&
+    !enViaje &&
+    (modoSeleccion === 'origen' || !originCoords || !destinoCoords);
+
+  // Previsualización en vivo de la calle/referencia bajo el pin central mientras el usuario mueve el mapa
+  useEffect(() => {
+    if (!mostrandoPin || !centroMapa) {
+      setDireccionBajoPin(null);
+      setCargandoDireccionPin(false);
+      return;
+    }
+
+    let cancelado = false;
+    setCargandoDireccionPin(true);
+    const timer = setTimeout(() => {
+      void obtenerDireccionLegible(centroMapa)
+        .then((dir) => {
+          if (!cancelado) {
+            setDireccionBajoPin(dir);
+          }
+        })
+        .finally(() => {
+          if (!cancelado) {
+            setCargandoDireccionPin(false);
+          }
+        });
+    }, 450);
+
+    return () => {
+      cancelado = true;
+      clearTimeout(timer);
+    };
+  }, [mostrandoPin, centroMapa]);
 
   const { distanciaKm, tarifaSugerida } = useMemo(() => {
     if (!originCoords || !destinoCoords) {
@@ -196,9 +275,81 @@ export default function PantallaMapa() {
     };
   }, [originCoords, destinoCoords, configPlataforma]);
 
-  function centrarEnHuancavelica(punto: Coordenadas = HUANCAVELICA_CENTRO) {
+  function moverCamaraA(punto: Coordenadas, delta = ZOOM_INICIAL) {
     setCentroMapa(punto);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: punto.latitude,
+        longitude: punto.longitude,
+        latitudeDelta: delta,
+        longitudeDelta: delta,
+      },
+      450,
+    );
+  }
+
+  function ajustarRutaEnMapa(origen: Coordenadas, destino: Coordenadas) {
+    mapRef.current?.fitToCoordinates([origen, destino], {
+      edgePadding: { top: 90, right: 60, bottom: 290, left: 60 },
+      animated: true,
+    });
+  }
+
+  function centrarEnHuancavelica(punto: Coordenadas = HUANCAVELICA_CENTRO) {
+    moverCamaraA(punto);
     setMensaje('Mapa centrado en Huancavelica.');
+  }
+
+  async function irAMiUbicacion() {
+    setError(null);
+    if (!coords) {
+      const ok = await requestPermissionAndLocate();
+      if (!ok) {
+        centrarEnHuancavelica();
+      }
+      return;
+    }
+
+    const fuera = estaFueraDeHuancavelica(coords);
+    const punto: Coordenadas = fuera
+      ? HUANCAVELICA_CENTRO
+      : { latitude: coords.latitude, longitude: coords.longitude };
+    moverCamaraA(punto);
+    setMensaje(
+      fuera
+        ? 'Emulador fuera de Huancavelica: centrado en Plaza de Armas.'
+        : 'Mapa centrado en tu ubicación actual.',
+    );
+  }
+
+  async function usarMiGpsComoOrigen() {
+    setError(null);
+    if (!coords) {
+      const ok = await requestPermissionAndLocate();
+      if (!ok) {
+        moverCamaraA(HUANCAVELICA_CENTRO);
+        return;
+      }
+      return;
+    }
+
+    const fuera = estaFueraDeHuancavelica(coords);
+    const punto: Coordenadas = fuera
+      ? HUANCAVELICA_CENTRO
+      : { latitude: coords.latitude, longitude: coords.longitude };
+    setOriginCoords(punto);
+    setOrigenDireccion(formatearReferenciaHuancavelica(punto));
+    setModoSeleccion('destino');
+    moverCamaraA(punto);
+    void obtenerDireccionLegible(punto).then(setOrigenDireccion);
+    if (destinoCoords) {
+      ajustarRutaEnMapa(punto, destinoCoords);
+    }
+    setMensaje(
+      fuera
+        ? 'Origen fijado en Plaza de Armas (emulador). Elige tu destino.'
+        : 'Origen actualizado con tu GPS actual.',
+    );
   }
 
   // Suscripción en tiempo real a las ofertas de la solicitud activa.
@@ -276,11 +427,17 @@ export default function PantallaMapa() {
     const punto = centroMapa;
     setOriginCoords(punto);
     setOrigenDireccion(formatearReferenciaHuancavelica(punto));
-    setMensaje('Origen fijado. Mueve el mapa para fijar el destino.');
+    setModoSeleccion('destino');
     setError(null);
     void obtenerDireccionLegible(punto).then((dir) => {
       setOrigenDireccion(dir);
     });
+    if (destinoCoords) {
+      ajustarRutaEnMapa(punto, destinoCoords);
+      setMensaje('Origen actualizado. Revisa la ruta y tu tarifa.');
+    } else {
+      setMensaje('Origen fijado. Mueve el mapa para elegir tu destino.');
+    }
   }
 
   function fijarDestino() {
@@ -288,11 +445,16 @@ export default function PantallaMapa() {
     const punto = centroMapa;
     setDestinoCoords(punto);
     setDestinoDireccion(formatearReferenciaHuancavelica(punto));
+    setModoSeleccion('destino');
     setMensaje('Destino fijado. Revisa la tarifa sugerida o propón la tuya.');
     setError(null);
     void obtenerDireccionLegible(punto).then((dir) => {
       setDestinoDireccion(dir);
     });
+
+    if (originCoords) {
+      ajustarRutaEnMapa(originCoords, punto);
+    }
 
     if (originCoords && !tarifa.trim()) {
       const km = calcularDistanciaHaversine(
@@ -424,10 +586,13 @@ export default function PantallaMapa() {
     setOfertas([]);
     setViajeAceptado(null);
     setPerfilConductor(null);
+    origenInicializadoRef.current = false;
     setOriginCoords(null);
     setDestinoCoords(null);
     setOrigenDireccion(null);
     setDestinoDireccion(null);
+    setModoSeleccion('destino');
+    setDireccionBajoPin(null);
     setTarifa('');
     setEstrellasSeleccionadas(5);
     setCalificacionEnviada(false);
@@ -505,10 +670,59 @@ export default function PantallaMapa() {
       ? { latitude: solicitud.destino_lat, longitude: solicitud.destino_lng }
       : destinoCoords;
 
+  function encuadrarViajeActivo() {
+    if (!mapRef.current) return;
+    const puntos = [puntoOrigenMapa, puntoDestinoMapa, coordsConductor].filter(
+      (p): p is Coordenadas => Boolean(p),
+    );
+    if (puntos.length >= 2) {
+      mapRef.current.fitToCoordinates(puntos, {
+        edgePadding: { top: 90, right: 60, bottom: 290, left: 60 },
+        animated: true,
+      });
+    } else if (puntos[0]) {
+      moverCamaraA(puntos[0], 0.015);
+    }
+  }
+
+  // Encuadra automáticamente al pasajero, destino y conductor al iniciar o cambiar el estado del viaje
+  useEffect(() => {
+    if (!viajeAceptado) {
+      ultimoEncuadreRef.current = null;
+      return;
+    }
+    const clave = `${viajeAceptado.id}:${viajeAceptado.estado}:${Boolean(coordsConductor)}`;
+    if (ultimoEncuadreRef.current === clave) return;
+    ultimoEncuadreRef.current = clave;
+
+    const timer = setTimeout(() => {
+      encuadrarViajeActivo();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [viajeAceptado?.id, viajeAceptado?.estado, coordsConductor]);
+
+  const infoConductorViaje = useMemo(() => {
+    if (!viajeAceptado || !coordsConductor) return null;
+    const haciaDestino = viajeAceptado.estado === 'en_curso';
+    const objetivo = haciaDestino ? puntoDestinoMapa : puntoOrigenMapa;
+    if (!objetivo) return null;
+    const km = calcularDistanciaHaversine(
+      coordsConductor.latitude,
+      coordsConductor.longitude,
+      objetivo.latitude,
+      objetivo.longitude,
+    );
+    const minutos = Math.max(1, Math.round((km / 22) * 60));
+    return { km, minutos, haciaDestino };
+  }, [viajeAceptado, coordsConductor, puntoOrigenMapa, puntoDestinoMapa]);
+
+  const gpsFueraDeHvca = Boolean(coords && estaFueraDeHuancavelica(coords));
+
   return (
     <View style={styles.contenedor}>
       {centroMapa ? (
         <MapView
+          ref={mapRef}
           style={styles.mapa}
           initialRegion={{
             latitude: centroMapa.latitude,
@@ -516,7 +730,7 @@ export default function PantallaMapa() {
             latitudeDelta: ZOOM_INICIAL,
             longitudeDelta: ZOOM_INICIAL,
           }}
-          showsUserLocation={Boolean(coords)}
+          showsUserLocation={Boolean(coords && !gpsFueraDeHvca)}
           showsMyLocationButton={false}
           onRegionChangeComplete={(region) => {
             if (!solicitud && !enViaje) {
@@ -577,7 +791,7 @@ export default function PantallaMapa() {
         </MapView>
       ) : (
         <View style={styles.estadoOverlay}>
-          {loading ? (
+          {gpsLoading || !viajeVerificado ? (
             <ActivityIndicator size="large" color={colores.primario} />
           ) : (
             <>
@@ -594,13 +808,39 @@ export default function PantallaMapa() {
         </View>
       )}
 
-      {/* Pin central fijo solo mientras se elige origen o destino */}
-      {centroMapa && !solicitud && !enViaje ? (
+      {/* Pin central fijo para elegir destino (o ajustar origen) */}
+      {mostrandoPin ? (
         <View pointerEvents="none" style={styles.pin}>
-          <View style={styles.pinCirculo}>
+          <View
+            style={[
+              styles.pinEtiqueta,
+              modoSeleccion === 'origen'
+                ? styles.pinEtiquetaOrigen
+                : styles.pinEtiquetaDestino,
+            ]}
+          >
+            <Text style={styles.pinEtiquetaTexto}>
+              {modoSeleccion === 'origen' ? '📍 Origen' : '🏁 Destino'}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.pinCirculo,
+              modoSeleccion === 'origen'
+                ? styles.pinCirculoOrigen
+                : styles.pinCirculoDestino,
+            ]}
+          >
             <View style={styles.pinPunto} />
           </View>
-          <View style={styles.pinTriangulo} />
+          <View
+            style={[
+              styles.pinTriangulo,
+              modoSeleccion === 'origen'
+                ? styles.pinTrianguloOrigen
+                : styles.pinTrianguloDestino,
+            ]}
+          />
         </View>
       ) : null}
 
@@ -615,6 +855,25 @@ export default function PantallaMapa() {
         <Text style={styles.logoutTexto}>Cerrar sesión</Text>
       </Pressable>
 
+      {/* Botón flotante para centrar en ubicación actual o encuadrar viaje activo */}
+      <Pressable
+        onPress={() => {
+          if (enViaje) {
+            encuadrarViajeActivo();
+          } else {
+            void irAMiUbicacion();
+          }
+        }}
+        style={[
+          styles.botonUbicacionFlotante,
+          { top: Math.max(insets.top, 12), right: Math.max(insets.right, 12) },
+        ]}
+      >
+        <Text style={styles.botonUbicacionTexto}>
+          {enViaje ? '🎯 Centrar' : '🎯 Mi ubicación'}
+        </Text>
+      </Pressable>
+
       {/* Barra inferior: preparación, búsqueda u ofertas */}
       {!enViaje ? (
         <View
@@ -627,22 +886,27 @@ export default function PantallaMapa() {
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           {!solicitud ? (
-            !originCoords ? (
+            modoSeleccion === 'origen' || !originCoords ? (
               <>
-                <Text style={styles.ayuda}>
-                  Mueve el mapa hasta tu ubicación de recogida y fija el origen.
-                </Text>
+                <View style={styles.cajaPreviaPin}>
+                  <Text style={styles.etiquetaPreviaPin}>🟢 Recojo bajo el pin:</Text>
+                  <Text style={styles.textoPreviaPin} numberOfLines={1}>
+                    {cargandoDireccionPin
+                      ? 'Buscando dirección...'
+                      : direccionBajoPin ?? 'Mueve el mapa a tu punto de recogida'}
+                  </Text>
+                </View>
                 <View style={styles.filaAccionesMapa}>
                   <Button
-                    label="Fijar Origen"
+                    label="Confirmar origen"
                     onPress={fijarOrigen}
                     deshabilitado={!centroMapa}
                     estilo={styles.botonMitad}
                   />
                   <Button
-                    label="📍 Plaza Huancavelica"
+                    label="🎯 Usar GPS"
                     variante="secundario"
-                    onPress={() => centrarEnHuancavelica()}
+                    onPress={() => void usarMiGpsComoOrigen()}
                     estilo={styles.botonMitad}
                   />
                 </View>
@@ -651,12 +915,15 @@ export default function PantallaMapa() {
               <>
                 <View style={styles.filaPuntoFijado}>
                   <Text style={styles.ayudaPunto} numberOfLines={1}>
-                    🟢 Origen: {origenDireccion ?? `${originCoords.latitude.toFixed(4)}, ${originCoords.longitude.toFixed(4)}`}
+                    🟢 Origen:{' '}
+                    {origenDireccion ??
+                      `${originCoords.latitude.toFixed(4)}, ${originCoords.longitude.toFixed(4)}`}
                   </Text>
                   <Pressable
                     onPress={() => {
-                      setOriginCoords(null);
-                      setOrigenDireccion(null);
+                      setModoSeleccion('origen');
+                      moverCamaraA(originCoords);
+                      setMensaje('Mueve el mapa y confirma tu nuevo origen.');
                     }}
                   >
                     <Text style={styles.enlaceCambiar}>Cambiar</Text>
@@ -666,64 +933,91 @@ export default function PantallaMapa() {
                 {destinoCoords ? (
                   <View style={styles.filaPuntoFijado}>
                     <Text style={styles.ayudaPunto} numberOfLines={1}>
-                      🔴 Destino: {destinoDireccion ?? `${destinoCoords.latitude.toFixed(4)}, ${destinoCoords.longitude.toFixed(4)}`}
+                      🔴 Destino:{' '}
+                      {destinoDireccion ??
+                        `${destinoCoords.latitude.toFixed(4)}, ${destinoCoords.longitude.toFixed(4)}`}
                     </Text>
                     <Pressable
                       onPress={() => {
                         setDestinoCoords(null);
                         setDestinoDireccion(null);
+                        setModoSeleccion('destino');
                       }}
                     >
                       <Text style={styles.enlaceCambiar}>Cambiar</Text>
                     </Pressable>
                   </View>
                 ) : (
-                  <Button
-                    label="Fijar Destino"
-                    variante="secundario"
-                    onPress={fijarDestino}
-                    estilo={styles.botonMitad}
-                  />
+                  <>
+                    <View style={styles.cajaPreviaPin}>
+                      <Text style={styles.etiquetaPreviaPin}>
+                        🏁 Destino bajo el pin (mueve el mapa):
+                      </Text>
+                      <Text style={styles.textoPreviaPin} numberOfLines={1}>
+                        {cargandoDireccionPin
+                          ? 'Buscando calle o referencia...'
+                          : direccionBajoPin ?? 'Mueve el mapa hasta tu destino'}
+                      </Text>
+                    </View>
+                    <View style={styles.filaAccionesMapa}>
+                      <Button
+                        label="Confirmar destino"
+                        onPress={fijarDestino}
+                        deshabilitado={!centroMapa}
+                        estilo={styles.botonMitad}
+                      />
+                      <Button
+                        label="📍 Plaza"
+                        variante="secundario"
+                        onPress={() => centrarEnHuancavelica()}
+                        estilo={styles.botonMitad}
+                      />
+                    </View>
+                  </>
                 )}
 
-                {tarifaSugerida !== null && distanciaKm !== null ? (
-                  <Pressable
-                    style={styles.chipTarifaSugerida}
-                    onPress={() => setTarifa(tarifaSugerida.toFixed(2))}
-                  >
-                    <Text style={styles.textoChipSugerida}>
-                      💡 Tarifa sugerida ({distanciaKm.toFixed(1)} km): S/{' '}
-                      {tarifaSugerida.toFixed(2)} · Toca para usar
-                    </Text>
-                  </Pressable>
+                {destinoCoords ? (
+                  <>
+                    {tarifaSugerida !== null && distanciaKm !== null ? (
+                      <Pressable
+                        style={styles.chipTarifaSugerida}
+                        onPress={() => setTarifa(tarifaSugerida.toFixed(2))}
+                      >
+                        <Text style={styles.textoChipSugerida}>
+                          💡 Tarifa sugerida ({distanciaKm.toFixed(1)} km): S/{' '}
+                          {tarifaSugerida.toFixed(2)} · Toca para usar
+                        </Text>
+                      </Pressable>
+                    ) : null}
+
+                    <Input
+                      etiqueta="Tu tarifa propuesta"
+                      value={tarifa}
+                      onChangeText={setTarifa}
+                      keyboardType="decimal-pad"
+                      placeholder="S/ 5.00"
+                      testID="input-tarifa"
+                      style={styles.inputTarifa}
+                    />
+                    {!perfil?.telefono_verificado && (
+                      <Pressable
+                        style={styles.alertaVerificacion}
+                        onPress={() => router.push('/(tabs)/perfil')}
+                      >
+                        <Text style={styles.textoAlertaVerificacion}>
+                          🔒 Teléfono no verificado. Toca aquí para validarlo con tu código OTP antes de pedir taxi.
+                        </Text>
+                      </Pressable>
+                    )}
+                    <Button
+                      label="Pedir Taxi"
+                      onPress={() => void pedirTaxi()}
+                      cargando={operando}
+                      deshabilitado={!tarifa.trim()}
+                      estilo={styles.boton}
+                    />
+                  </>
                 ) : null}
-
-                <Input
-                  etiqueta="Tu tarifa propuesta"
-                  value={tarifa}
-                  onChangeText={setTarifa}
-                  keyboardType="decimal-pad"
-                  placeholder="S/ 5.00"
-                  testID="input-tarifa"
-                  style={styles.inputTarifa}
-                />
-                {!perfil?.telefono_verificado && (
-                  <Pressable
-                    style={styles.alertaVerificacion}
-                    onPress={() => router.push('/(tabs)/perfil')}
-                  >
-                    <Text style={styles.textoAlertaVerificacion}>
-                      🔒 Teléfono no verificado. Toca aquí para validarlo con tu código OTP antes de pedir taxi.
-                    </Text>
-                  </Pressable>
-                )}
-                <Button
-                  label="Pedir Taxi"
-                  onPress={() => void pedirTaxi()}
-                  cargando={operando}
-                  deshabilitado={!tarifa.trim()}
-                  estilo={styles.boton}
-                />
               </>
             )
           ) : (
@@ -814,6 +1108,18 @@ export default function PantallaMapa() {
           <Text style={styles.viajeEstado}>
             {textoEstadoViaje(viajeAceptado.estado)}
           </Text>
+          {infoConductorViaje &&
+          viajeAceptado.estado !== 'completado' &&
+          viajeAceptado.estado !== 'cancelada' ? (
+            <View style={styles.badgeEtaConductor}>
+              <Text style={styles.textoEtaConductor}>
+                🚕 A ~{infoConductorViaje.minutos} min ({infoConductorViaje.km.toFixed(1)} km){' '}
+                {infoConductorViaje.haciaDestino
+                  ? 'de tu destino'
+                  : 'de tu punto de recogida'}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.viajeDivisor} />
           {perfilConductor ? (
             <>
@@ -956,8 +1262,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: '50%',
     left: '50%',
+    width: 120,
+    height: 90,
+    justifyContent: 'flex-end',
     alignItems: 'center',
-    transform: [{ translateX: -20 }, { translateY: -54 }],
+    transform: [{ translateX: -60 }, { translateY: -90 }],
   },
   pinCirculo: {
     width: 40,
@@ -1250,6 +1559,94 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#92400E',
     lineHeight: 16,
+    textAlign: 'center',
+  },
+  pinEtiqueta: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginBottom: 4,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  pinEtiquetaOrigen: {
+    backgroundColor: '#16A34A',
+  },
+  pinEtiquetaDestino: {
+    backgroundColor: '#DC2626',
+  },
+  pinEtiquetaTexto: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  pinCirculoOrigen: {
+    backgroundColor: '#16A34A',
+  },
+  pinCirculoDestino: {
+    backgroundColor: '#DC2626',
+  },
+  pinTrianguloOrigen: {
+    borderTopColor: '#16A34A',
+  },
+  pinTrianguloDestino: {
+    borderTopColor: '#DC2626',
+  },
+  botonUbicacionFlotante: {
+    position: 'absolute',
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  botonUbicacionTexto: {
+    color: colores.primario,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cajaPreviaPin: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 4,
+  },
+  etiquetaPreviaPin: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colores.textoSuave,
+    marginBottom: 2,
+  },
+  textoPreviaPin: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  badgeEtaConductor: {
+    marginTop: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  textoEtaConductor: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1D4ED8',
     textAlign: 'center',
   },
 });

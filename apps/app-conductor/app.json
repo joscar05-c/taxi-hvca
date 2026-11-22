@@ -52,7 +52,10 @@
           "isIosBackgroundLocationEnabled": true
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin",
+      ["../../plugins/withShortCxxDir", { "subdir": "c" }],
+      "../../plugins/withGoogleMapsApiKey"
     ],
     "extra": {
       "router": {},
