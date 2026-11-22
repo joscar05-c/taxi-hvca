@@ -36,7 +36,10 @@ import {
   type SolicitudViaje,
 } from '@hvca/shared';
 
-import { BACKGROUND_LOCATION_TASK } from '../../locationTask';
+import {
+  BACKGROUND_LOCATION_TASK,
+  setModoSimulacionUbicacion,
+} from '../../locationTask';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -94,6 +97,7 @@ export default function PantallaInicio() {
     timestamp: number;
   } | null>(null);
   const indiceRutaSimRef = useRef(1);
+  const cancelacionPropiaRef = useRef<string | null>(null);
 
   const [direccionConductor, setDireccionConductor] = useState<string | null>(null);
   const [cargandoDireccion, setCargandoDireccion] = useState(false);
@@ -124,7 +128,7 @@ export default function PantallaInicio() {
     if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
   }, [perfil?.vehiculo]);
 
-  // Recuperar automáticamente el viaje activo asignado al conductor al abrir la app
+  // Recuperar automáticamente el viaje activo y ofertas pendientes al abrir la app
   useEffect(() => {
     if (!idConductor) return;
     let activo = true;
@@ -138,6 +142,18 @@ export default function PantallaInicio() {
       .catch((e) => {
         console.warn('[inicio] Error al recuperar viaje activo:', e);
       });
+
+    void viajesRepository
+      .obtenerOfertasPendientesConductor(idConductor)
+      .then((pendientes) => {
+        if (activo && pendientes.length > 0) {
+          setOfertasEnviadas((prev) => new Set([...prev, ...pendientes]));
+        }
+      })
+      .catch((e) => {
+        console.warn('[inicio] Error al recuperar ofertas pendientes:', e);
+      });
+
     return () => {
       activo = false;
     };
@@ -171,6 +187,10 @@ export default function PantallaInicio() {
       setSimularHuancavelica(true);
     }
   }, [esEmuladorFueraDeHvca]);
+
+  useEffect(() => {
+    void setModoSimulacionUbicacion(simularHuancavelica);
+  }, [simularHuancavelica]);
 
   const ubicacionConductor = useMemo<Coordenadas | null>(() => {
     if (simularHuancavelica) {
@@ -447,47 +467,33 @@ export default function PantallaInicio() {
     );
   }, [isTracking, manejarNuevaSolicitud, manejarSolicitudEliminada]);
 
-  // Por cada solicitud con oferta enviada, escuchamos si el pasajero la acepta o cancela.
+  // Por cada solicitud con oferta enviada (que aún no sea el viajeActivo), escuchamos si el pasajero la acepta o cambia de estado.
   useEffect(() => {
     const limpiadores: Array<() => void> = [];
     ofertasEnviadas.forEach((solicitudId) => {
+      if (solicitudId === viajeActivo?.id) return;
       limpiadores.push(
         viajesRepository.suscribirCambiosSolicitud(
           solicitudId,
           (solicitud) => {
-            if (solicitud.estado === 'aceptado') {
-              if (solicitud.conductor_id === idConductor) {
-                setViajeActivo(solicitud);
-              } else {
-                setOfertasEnviadas((prev) => {
-                  const nuevo = new Set(prev);
-                  nuevo.delete(solicitudId);
-                  return nuevo;
-                });
-                setSolicitudesCercanas((prev) =>
-                  prev.filter((s) => s.solicitud.id !== solicitudId),
-                );
-              }
-            } else if (solicitud.estado === 'cancelada') {
-              setOfertasEnviadas((prev) => {
-                const nuevo = new Set(prev);
-                nuevo.delete(solicitudId);
-                return nuevo;
-              });
-              setSolicitudesCercanas((prev) =>
-                prev.filter((s) => s.solicitud.id !== solicitudId),
-              );
-              setViajeActivo((actual) => {
-                if (actual?.id === solicitudId) {
-                  Alert.alert(
-                    'Viaje cancelado',
-                    'El pasajero ha cancelado la solicitud de viaje.',
-                  );
-                  return null;
-                }
-                return actual;
-              });
+            if (solicitud.estado === 'buscando') return;
+
+            if (
+              solicitud.estado === 'aceptado' &&
+              solicitud.conductor_id === idConductor
+            ) {
+              setViajeActivo(solicitud);
             }
+
+            solicitudesPendientesRef.current.delete(solicitudId);
+            setOfertasEnviadas((prev) => {
+              const nuevo = new Set(prev);
+              nuevo.delete(solicitudId);
+              return nuevo;
+            });
+            setSolicitudesCercanas((prev) =>
+              prev.filter((s) => s.solicitud.id !== solicitudId),
+            );
           },
           (err) => {
             console.warn('[inicio] Error en suscripción solicitud:', err);
@@ -498,7 +504,7 @@ export default function PantallaInicio() {
     return () => {
       limpiadores.forEach((limpiar) => limpiar());
     };
-  }, [ofertasEnviadas, idConductor]);
+  }, [ofertasEnviadas, idConductor, viajeActivo?.id]);
 
   // Escuchar reactivamente cambios en el viaje activo
   useEffect(() => {
@@ -507,11 +513,16 @@ export default function PantallaInicio() {
       viajeActivo.id,
       (solicitudActualizada) => {
         if (solicitudActualizada.estado === 'cancelada') {
-          Alert.alert(
-            'Viaje cancelado',
-            'El pasajero ha cancelado el viaje. Regresando a la pantalla de solicitudes.',
-          );
+          if (cancelacionPropiaRef.current === solicitudActualizada.id) {
+            cancelacionPropiaRef.current = null;
+          } else {
+            Alert.alert(
+              'Viaje cancelado',
+              'El pasajero ha cancelado el viaje. Regresando a la pantalla de solicitudes.',
+            );
+          }
           setViajeActivo(null);
+          solicitudesPendientesRef.current.delete(solicitudActualizada.id);
           setOfertasEnviadas((prev) => {
             const nuevo = new Set(prev);
             nuevo.delete(solicitudActualizada.id);
@@ -533,6 +544,44 @@ export default function PantallaInicio() {
     return () => unsub();
   }, [viajeActivo?.id, viajeActivo?.estado]);
 
+  function validarRequisitosOperativos(): boolean {
+    if (!perfil?.telefono_verificado) {
+      Alert.alert(
+        'Verificación Obligatoria',
+        'Por seguridad, debes verificar tu número de celular con el código OTP antes de conectarte o enviar ofertas.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Verificar en Perfil',
+            onPress: () => router.push('/(tabs)/perfil'),
+          },
+        ],
+      );
+      return false;
+    }
+
+    if (perfil?.estado_documentos !== 'aprobado' || !perfil?.vehiculo?.trim()) {
+      const estadoDocs = perfil?.estado_documentos;
+      const mensajeDocs =
+        estadoDocs === 'en_revision'
+          ? 'Tus documentos de conductor están en revisión. Podrás conectarte y ofertar apenas sean aprobados por administración.'
+          : estadoDocs === 'rechazado'
+            ? 'Tus documentos de conductor fueron rechazados. Revisa y actualiza tu documentación en tu Perfil.'
+            : 'Debes registrar tu vehículo y documentación (DNI, licencia y SOAT) y contar con aprobación antes de conectarte o enviar ofertas.';
+
+      Alert.alert('Documentación Requerida', mensajeDocs, [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Ir a Mi Perfil',
+          onPress: () => router.push('/(tabs)/perfil'),
+        },
+      ]);
+      return false;
+    }
+
+    return true;
+  }
+
   async function alternarConexion() {
     setMensaje(null);
     setError(null);
@@ -544,18 +593,7 @@ export default function PantallaInicio() {
         setSolicitudesCercanas([]);
         setMensaje('Te desconectaste. Ya no compartes tu ubicación.');
       } else {
-        if (!perfil?.telefono_verificado) {
-          Alert.alert(
-            'Verificación Obligatoria',
-            'Por seguridad, debes verificar tu número de celular con el código OTP antes de conectarte para recibir viajes.',
-            [
-              { text: 'Cancelar', style: 'cancel' },
-              {
-                text: 'Verificar en Perfil',
-                onPress: () => router.push('/(tabs)/perfil'),
-              },
-            ],
-          );
+        if (!validarRequisitosOperativos()) {
           return;
         }
 
@@ -599,18 +637,7 @@ export default function PantallaInicio() {
   async function aceptarSolicitud(solicitud: SolicitudViaje) {
     if (!sesion?.user) return;
 
-    if (!perfil?.telefono_verificado) {
-      Alert.alert(
-        'Verificación Obligatoria',
-        'Por seguridad, debes verificar tu número de celular antes de enviar ofertas.',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Verificar en Perfil',
-            onPress: () => router.push('/(tabs)/perfil'),
-          },
-        ],
-      );
+    if (!validarRequisitosOperativos()) {
       return;
     }
 
@@ -642,18 +669,7 @@ export default function PantallaInicio() {
   async function confirmarContraoferta(solicitud: SolicitudViaje) {
     if (!sesion?.user || contraofertaId !== solicitud.id) return;
 
-    if (!perfil?.telefono_verificado) {
-      Alert.alert(
-        'Verificación Obligatoria',
-        'Por seguridad, debes verificar tu número de celular antes de enviar ofertas.',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Verificar en Perfil',
-            onPress: () => router.push('/(tabs)/perfil'),
-          },
-        ],
-      );
+    if (!validarRequisitosOperativos()) {
       return;
     }
 
@@ -751,6 +767,51 @@ export default function PantallaInicio() {
     } finally {
       setOperando(false);
     }
+  }
+
+  function cancelarViajeConductor() {
+    if (!viajeActivo) return;
+    const solicitudId = viajeActivo.id;
+    Alert.alert(
+      'Cancelar viaje',
+      '¿Confirmas que deseas cancelar este viaje asignado?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Sí, cancelar',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              cancelacionPropiaRef.current = solicitudId;
+              setOperando(true);
+              setError(null);
+              setMensaje(null);
+              try {
+                await viajesRepository.cancelarSolicitud(solicitudId, {
+                  canceladoPor: 'conductor',
+                });
+                setViajeActivo(null);
+                solicitudesPendientesRef.current.delete(solicitudId);
+                setOfertasEnviadas((prev) => {
+                  const nuevo = new Set(prev);
+                  nuevo.delete(solicitudId);
+                  return nuevo;
+                });
+                setContraofertaId(null);
+                setMensaje('Viaje cancelado.');
+              } catch (e) {
+                cancelacionPropiaRef.current = null;
+                setError(
+                  e instanceof Error ? e.message : 'No se pudo cancelar el viaje.',
+                );
+              } finally {
+                setOperando(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
   }
 
   async function enviarCalificacionPasajero() {
@@ -1019,6 +1080,21 @@ export default function PantallaInicio() {
           </Pressable>
         )}
 
+        {(perfil?.estado_documentos !== 'aprobado' || !perfil?.vehiculo?.trim()) && (
+          <Pressable
+            style={styles.avisoVerificacionConductor}
+            onPress={() => router.push('/(tabs)/perfil')}
+          >
+            <Text style={styles.textoAvisoVerificacionConductor}>
+              {perfil?.estado_documentos === 'en_revision'
+                ? '⏳ Tus documentos KYC están en revisión. Toca aquí para ver el estado en tu Perfil.'
+                : perfil?.estado_documentos === 'rechazado'
+                  ? '❌ Documentación KYC rechazada. Toca aquí para corregir tus datos en Mi Perfil.'
+                  : '🪪 Registra tu vehículo, DNI, brevete y SOAT en Mi Perfil para recibir aprobación y conectarte.'}
+            </Text>
+          </Pressable>
+        )}
+
         {errorTracking ? (
           <Text style={styles.error}>{errorTracking}</Text>
         ) : null}
@@ -1166,7 +1242,7 @@ export default function PantallaInicio() {
 
             {/* Resumen de ruta visible en el mapa superior */}
             <View style={styles.cajaRutaViaje}>
-              <Text style={styles.textoRutaViaje} numberOfLines={1}>
+              <Text style={styles.textoRutaViaje} numberOfLines={2}>
                 🟢 Recojo:{' '}
                 {viajeActivo.origen_direccion ??
                   formatearReferenciaHuancavelica({
@@ -1174,7 +1250,7 @@ export default function PantallaInicio() {
                     longitude: viajeActivo.origen_lng,
                   })}
               </Text>
-              <Text style={styles.textoRutaViaje} numberOfLines={1}>
+              <Text style={styles.textoRutaViaje} numberOfLines={2}>
                 🔴 Destino:{' '}
                 {viajeActivo.destino_direccion ??
                   formatearReferenciaHuancavelica({
@@ -1198,22 +1274,6 @@ export default function PantallaInicio() {
               </View>
             ) : null}
 
-            <Text style={styles.viajeOrigen}>
-              🟢 Origen:{' '}
-              {viajeActivo.origen_direccion ??
-                formatearReferenciaHuancavelica({
-                  latitude: viajeActivo.origen_lat,
-                  longitude: viajeActivo.origen_lng,
-                })}
-            </Text>
-            <Text style={styles.viajeDetalle}>
-              🔴 Destino:{' '}
-              {viajeActivo.destino_direccion ??
-                formatearReferenciaHuancavelica({
-                  latitude: viajeActivo.destino_lat,
-                  longitude: viajeActivo.destino_lng,
-                })}
-            </Text>
             <Text style={styles.viajePrecio}>
               S/{' '}
               {Number(
@@ -1266,6 +1326,16 @@ export default function PantallaInicio() {
                   variante="peligro"
                   onPress={() => void finalizarViaje()}
                   cargando={operando}
+                  estilo={styles.botonViaje}
+                />
+              ) : null}
+              {viajeActivo.estado === 'aceptado' ||
+              viajeActivo.estado === 'en_camino_origen' ? (
+                <Button
+                  label="Cancelar viaje"
+                  variante="secundario"
+                  onPress={cancelarViajeConductor}
+                  deshabilitado={operando}
                   estilo={styles.botonViaje}
                 />
               ) : null}

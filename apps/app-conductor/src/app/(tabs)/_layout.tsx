@@ -3,9 +3,9 @@ import { Redirect, Tabs } from 'expo-router';
 import { useAuthStore } from '@hvca/shared';
 
 export default function TabsLayout() {
-  const { session } = useAuthStore();
+  const { session, perfil } = useAuthStore();
 
-  if (!session) {
+  if (!session || (perfil && perfil.rol !== 'conductor')) {
     return <Redirect href="/login" />;
   }
 

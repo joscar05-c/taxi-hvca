@@ -1,17 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+import { RecaptchaVerifier } from 'firebase/auth';
 
 import type { Profile } from '../domain/types';
-import { authRepository } from '../data/auth.repository';
+import {
+  authRepository,
+  normalizarTelefonoPeruE164,
+} from '../data/auth.repository';
+import { auth } from '../data/firebaseClient';
 import { useAuthStore } from '../store/useAuthStore';
 import { Button } from './Button';
-import { colores } from './theme';
+
+const RECAPTCHA_WEB_CONTAINER_ID = 'recaptcha-phone-web';
+const DEFAULT_PHONE_AUTH_URL = 'https://taxi-hvca.vercel.app/verificar-telefono';
 
 export interface SeccionVerificacionTelefonoProps {
   perfil: Profile | null;
@@ -29,14 +39,17 @@ export function SeccionVerificacionTelefono({
   );
   const [paso, setPaso] = useState<'ingreso_numero' | 'ingreso_codigo'>('ingreso_numero');
   const [numeroTelefono, setNumeroTelefono] = useState(
-    perfil?.telefono ? perfil.telefono.replace(/^\+51\s?/, '') : '',
+    perfil?.telefono ? perfil.telefono.replace(/^\+51\s?/, '').replace(/\D/g, '') : '',
   );
   const [codigoOtp, setCodigoOtp] = useState('');
+  const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [telefonoPendiente, setTelefonoPendiente] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exito, setExito] = useState<string | null>(null);
-  const [codigoDev, setCodigoDev] = useState<string | null>(null);
   const [segundosRestantes, setSegundosRestantes] = useState(0);
+
+  const recaptchaWebRef = useRef<RecaptchaVerifier | null>(null);
 
   // Temporizador para reenvío de código
   useEffect(() => {
@@ -47,6 +60,20 @@ export function SeccionVerificacionTelefono({
     return () => clearInterval(interval);
   }, [segundosRestantes]);
 
+  // Limpiar reCAPTCHA web al desmontar
+  useEffect(() => {
+    return () => {
+      if (recaptchaWebRef.current) {
+        try {
+          recaptchaWebRef.current.clear();
+        } catch {
+          // Ignorar si ya fue desmontado
+        }
+        recaptchaWebRef.current = null;
+      }
+    };
+  }, []);
+
   // Si el perfil cambia externamente
   useEffect(() => {
     if (perfil?.telefono_verificado) {
@@ -54,38 +81,116 @@ export function SeccionVerificacionTelefono({
     }
   }, [perfil?.telefono_verificado]);
 
+  // Sincroniza el campo de teléfono cuando llega el perfil y no hay texto en edición activa
+  useEffect(() => {
+    if (perfil?.telefono) {
+      const limpioPerfil = perfil.telefono
+        .replace(/^\+51\s?/, '')
+        .replace(/\D/g, '');
+      setNumeroTelefono((actual) => (actual.trim().length === 0 ? limpioPerfil : actual));
+    }
+  }, [perfil?.telefono]);
+
   async function handleSolicitarCodigo() {
     setError(null);
     setExito(null);
-    setCodigoDev(null);
 
-    const limpio = numeroTelefono.trim().replace(/[\s\-()]+/g, '');
-    if (!/^9\d{8}$/.test(limpio)) {
-      setError('Por favor ingresa un número de celular de 9 dígitos que comience con 9.');
+    let telefonoE164: string;
+    try {
+      telefonoE164 = normalizarTelefonoPeruE164(numeroTelefono);
+    } catch (e: unknown) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : 'Por favor ingresa un número de celular de 9 dígitos que comience con 9.',
+      );
       return;
     }
 
     setCargando(true);
     try {
-      const res = await authRepository.solicitarCodigoVerificacionTelefono(limpio);
+      // Si Firebase Auth ya tiene ese mismo número vinculado, sincronizar sin re-enviar SMS
+      if (auth.currentUser?.phoneNumber === telefonoE164) {
+        const actualizado = await authRepository.sincronizarTelefonoYaVerificadoEnAuth();
+        if (actualizado) {
+          setPerfilStore(actualizado);
+          onPerfilActualizado?.(actualizado);
+          setModoEdicion(false);
+          setPaso('ingreso_numero');
+          setCodigoOtp('');
+          setVerificationId(null);
+          setTelefonoPendiente(null);
+          setExito('¡Tu número telefónico ya estaba verificado y fue sincronizado!');
+          return;
+        }
+      }
+
+      let idVerificacion = '';
+      if (Platform.OS === 'web') {
+        if (recaptchaWebRef.current) {
+          try {
+            recaptchaWebRef.current.clear();
+          } catch {
+            // Ignorar
+          }
+          recaptchaWebRef.current = null;
+        }
+        const verifier = new RecaptchaVerifier(auth, RECAPTCHA_WEB_CONTAINER_ID, {
+          size: 'invisible',
+        });
+        recaptchaWebRef.current = verifier;
+        const res = await authRepository.enviarCodigoSmsWeb(telefonoE164, verifier);
+        idVerificacion = res.verificationId;
+      } else {
+        const baseUrl = (
+          process.env.EXPO_PUBLIC_PHONE_AUTH_URL || DEFAULT_PHONE_AUTH_URL
+        ).trim();
+        const redirectUrl = Linking.createURL('verificacion-telefono');
+        const authUrl = `${baseUrl}?phone=${encodeURIComponent(
+          telefonoE164,
+        )}&redirect=${encodeURIComponent(redirectUrl)}`;
+
+        const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
+        if (result.type !== 'success') {
+          if (result.type === 'cancel' || result.type === 'dismiss') {
+            setError('Verificación cancelada antes de enviar el código SMS.');
+          }
+          return;
+        }
+
+        const parsed = Linking.parse(result.url);
+        const queryError = parsed.queryParams?.error;
+        if (typeof queryError === 'string' && queryError.length > 0) {
+          setError(
+            queryError === 'cancelled'
+              ? 'Verificación cancelada.'
+              : `No se pudo iniciar la verificación (${queryError}).`,
+          );
+          return;
+        }
+
+        const vid = parsed.queryParams?.verificationId;
+        if (typeof vid !== 'string' || !vid.trim()) {
+          throw new Error('No se recibió el identificador de verificación SMS.');
+        }
+        idVerificacion = vid.trim();
+      }
+
+      setVerificationId(idVerificacion);
+      setTelefonoPendiente(telefonoE164);
       setPaso('ingreso_codigo');
       setSegundosRestantes(60);
-      setCodigoDev(res.codigoSimuladoParaDev);
-      setExito(`Código de 6 dígitos enviado por SMS a +51 ${limpio}`);
-
-      if (res.codigoSimuladoParaDev) {
-        Alert.alert(
-          'Código SMS Enviado (Modo Dev)',
-          `Se ha enviado un código de verificación a tu celular: +51 ${limpio}\n\nCódigo de prueba: ${res.codigoSimuladoParaDev}`,
-        );
-      } else {
-        Alert.alert(
-          'Código SMS Enviado',
-          `Se ha enviado un código de verificación de 6 dígitos a tu celular: +51 ${limpio}.`,
-        );
-      }
-    } catch (e: any) {
-      setError(e.message || 'No se pudo enviar el código de verificación.');
+      setExito(`Código de 6 dígitos enviado por SMS a ${telefonoE164}`);
+      Alert.alert(
+        'Código SMS Enviado',
+        `Se ha enviado un código de verificación de 6 dígitos a tu celular: ${telefonoE164}.`,
+      );
+    } catch (e: unknown) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : 'No se pudo enviar el código de verificación.',
+      );
     } finally {
       setCargando(false);
     }
@@ -96,14 +201,25 @@ export function SeccionVerificacionTelefono({
     setExito(null);
 
     const limpio = codigoOtp.trim();
-    if (limpio.length !== 6) {
+    if (!/^\d{6}$/.test(limpio)) {
       setError('Ingresa el código completo de 6 dígitos.');
+      return;
+    }
+
+    if (!verificationId || !telefonoPendiente) {
+      setError('La sesión de verificación expiró. Solicita un nuevo código SMS.');
+      setPaso('ingreso_numero');
       return;
     }
 
     setCargando(true);
     try {
-      const perfilActualizado = await authRepository.confirmarCodigoTelefono(limpio);
+      const perfilActualizado =
+        await authRepository.confirmarCodigoTelefonoFirebase(
+          verificationId,
+          limpio,
+          telefonoPendiente,
+        );
       setPerfilStore(perfilActualizado);
       if (onPerfilActualizado) {
         onPerfilActualizado(perfilActualizado);
@@ -111,11 +227,14 @@ export function SeccionVerificacionTelefono({
       setModoEdicion(false);
       setPaso('ingreso_numero');
       setCodigoOtp('');
-      setCodigoDev(null);
+      setVerificationId(null);
+      setTelefonoPendiente(null);
       setExito('¡Tu número telefónico ha sido verificado con éxito!');
       Alert.alert('Éxito', 'Número telefónico verificado y guardado correctamente.');
-    } catch (e: any) {
-      setError(e.message || 'Código incorrecto o expirado.');
+    } catch (e: unknown) {
+      setError(
+        e instanceof Error ? e.message : 'Código incorrecto o expirado.',
+      );
     } finally {
       setCargando(false);
     }
@@ -167,6 +286,8 @@ export function SeccionVerificacionTelefono({
           {exito ? <Text style={styles.mensajeExito}>{exito}</Text> : null}
           {error ? <Text style={styles.mensajeError}>{error}</Text> : null}
 
+          {Platform.OS === 'web' ? <View nativeID={RECAPTCHA_WEB_CONTAINER_ID} /> : null}
+
           {paso === 'ingreso_numero' ? (
             <View>
               <Text style={styles.labelInput}>Número de celular (Perú)</Text>
@@ -215,17 +336,9 @@ export function SeccionVerificacionTelefono({
                 keyboardType="number-pad"
                 maxLength={6}
                 value={codigoOtp}
-                onChangeText={setCodigoOtp}
+                onChangeText={(txt) => setCodigoOtp(txt.replace(/\D/g, ''))}
                 autoFocus
               />
-
-              {codigoDev ? (
-                <View style={styles.cajaCodigoDev}>
-                  <Text style={styles.textoCodigoDev}>
-                    🔑 Código de prueba generado: <Text style={styles.codigoDevNegrita}>{codigoDev}</Text>
-                  </Text>
-                </View>
-              ) : null}
 
               <Button
                 label="Validar y Confirmar Teléfono"
@@ -250,7 +363,12 @@ export function SeccionVerificacionTelefono({
                 <Button
                   label="Cambiar número"
                   variante="secundario"
-                  onPress={() => setPaso('ingreso_numero')}
+                  onPress={() => {
+                    setPaso('ingreso_numero');
+                    setVerificationId(null);
+                    setCodigoOtp('');
+                    setError(null);
+                  }}
                   estilo={styles.botonReenviar}
                 />
               </View>
@@ -402,23 +520,6 @@ const styles = StyleSheet.create({
     color: '#1E40AF',
     textAlign: 'center',
     letterSpacing: 8,
-  },
-  cajaCodigoDev: {
-    marginTop: 8,
-    backgroundColor: '#FEF3C7',
-    padding: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  textoCodigoDev: {
-    fontSize: 11,
-    color: '#92400E',
-    textAlign: 'center',
-  },
-  codigoDevNegrita: {
-    fontWeight: '800',
-    fontSize: 13,
   },
   botonAccion: {
     marginTop: 14,

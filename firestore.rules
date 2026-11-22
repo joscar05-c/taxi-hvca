@@ -16,24 +16,48 @@ service cloud.firestore {
         request.auth.token.email in ['locomancocapac@gmail.com'];
     }
 
+    function requesterProfileExists() {
+      return exists(/databases/$(database)/documents/perfiles/$(request.auth.uid));
+    }
+
+    function requesterProfile() {
+      return get(/databases/$(database)/documents/perfiles/$(request.auth.uid)).data;
+    }
+
     function isAdmin() {
       return isAuthenticated() && (
         request.auth.token.admin == true ||
         isBootstrapAdmin() ||
         (
-          exists(/databases/$(database)/documents/perfiles/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/perfiles/$(request.auth.uid)).data.rol == 'admin'
+          requesterProfileExists() &&
+          requesterProfile().rol == 'admin'
         )
       );
     }
 
-    function hasVerifiedPhone(userId, phone) {
-      return (request.auth.token.phone_number != null && request.auth.token.phone_number == phone) ||
-        (
-          exists(/databases/$(database)/documents/verificaciones_telefono/$(userId)) &&
-          get(/databases/$(database)/documents/verificaciones_telefono/$(userId)).data.verificado == true &&
-          get(/databases/$(database)/documents/verificaciones_telefono/$(userId)).data.telefono == phone
-        );
+    function hasVerifiedPhone(phone) {
+      return request.auth.token.phone_number != null &&
+        request.auth.token.phone_number == phone;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() &&
+        requesterProfileExists() &&
+        requesterProfile().rol == role;
+    }
+
+    function hasVerifiedPhoneInProfile() {
+      return isAuthenticated() &&
+        requesterProfileExists() &&
+        requesterProfile().get('telefono_verificado', false) == true;
+    }
+
+    function isApprovedDriver() {
+      return isAuthenticated() &&
+        requesterProfileExists() &&
+        requesterProfile().rol == 'conductor' &&
+        requesterProfile().get('telefono_verificado', false) == true &&
+        requesterProfile().get('estado_documentos', 'pendiente') == 'aprobado';
     }
 
     // 1. Perfiles de usuario (pasajeros, conductores y administradores)
@@ -44,19 +68,23 @@ service cloud.firestore {
       allow list: if isAdmin();
 
       // Creación: los usuarios normales solo pueden registrarse como 'pasajero' o 'conductor',
-      // nunca como 'admin', ni auto-verificarse el teléfono sin respaldo.
+      // nunca como 'admin', ni auto-aprobarse KYC, ni auto-verificarse el teléfono sin respaldo de Firebase Auth.
       allow create: if isAdmin() || (
         isOwner(userId) &&
         request.resource.data.id == userId &&
         request.resource.data.rol in ['pasajero', 'conductor'] &&
         request.resource.data.calificacion_promedio == 5.0 &&
         (
+          !('estado_documentos' in request.resource.data) ||
+          request.resource.data.estado_documentos == 'pendiente'
+        ) &&
+        (
           request.resource.data.telefono_verificado == false ||
-          hasVerifiedPhone(userId, request.resource.data.telefono)
+          hasVerifiedPhone(request.resource.data.telefono)
         )
       );
 
-      // Actualización: impide escalada de privilegios (cambio de rol/id/calificación propia)
+      // Actualización: impide escalada de privilegios (cambio de rol/id/calificación propia/aprobación KYC)
       // o permite actualizar calificación promedio al evaluar un viaje.
       allow update: if isAdmin() || (
         isOwner(userId) &&
@@ -66,12 +94,19 @@ service cloud.firestore {
         request.resource.data.calificacion_promedio == resource.data.calificacion_promedio &&
         request.resource.data.created_at == resource.data.created_at &&
         (
+          request.resource.data.get('estado_documentos', null) == resource.data.get('estado_documentos', null) ||
+          (
+            resource.data.rol == 'conductor' &&
+            request.resource.data.get('estado_documentos', null) == 'en_revision'
+          )
+        ) &&
+        (
           request.resource.data.telefono_verificado == false ||
           (
             resource.data.telefono_verificado == true &&
             request.resource.data.telefono == resource.data.telefono
           ) ||
-          hasVerifiedPhone(userId, request.resource.data.telefono)
+          hasVerifiedPhone(request.resource.data.telefono)
         )
       ) || (
         isAuthenticated() &&
@@ -85,7 +120,7 @@ service cloud.firestore {
         request.resource.data.calificacion_promedio >= 1 &&
         request.resource.data.calificacion_promedio <= 5 &&
         request.resource.data.total_calificaciones is int &&
-        request.resource.data.total_calificaciones >= 1
+        request.resource.data.total_calificaciones == resource.data.get('total_calificaciones', 1) + 1
       );
 
       allow delete: if isAdmin();
@@ -93,24 +128,26 @@ service cloud.firestore {
 
     // 2. Solicitudes de viaje
     match /solicitudes_viaje/{solicitudId} {
-      // Lectura puntual: pasajero dueño, conductor asignado, admin, o solicitudes en radar/transición.
+      // Lectura puntual: pasajero dueño, conductor asignado, admin, o solicitudes activas visibles para conductores.
       allow get: if isAuthenticated() && (
         isAdmin() ||
         resource.data.pasajero_id == request.auth.uid ||
         resource.data.conductor_id == request.auth.uid ||
-        resource.data.estado in ['buscando', 'aceptado', 'en_camino_origen', 'en_curso', 'completado', 'cancelada']
+        (hasRole('conductor') && resource.data.estado in ['buscando', 'aceptado', 'cancelada'])
       );
 
-      // Listado: los usuarios no pueden listar el historial privado de viajes de terceros.
+      // Listado: solo dueños, conductores mirando el radar de búsqueda o admins.
       allow list: if isAuthenticated() && (
         isAdmin() ||
-        resource.data.estado == 'buscando' ||
         resource.data.pasajero_id == request.auth.uid ||
-        resource.data.conductor_id == request.auth.uid
+        resource.data.conductor_id == request.auth.uid ||
+        (hasRole('conductor') && resource.data.estado == 'buscando')
       );
 
+      // Creación: únicamente pasajeros con teléfono verificado.
       allow create: if isAdmin() || (
-        isAuthenticated() &&
+        hasRole('pasajero') &&
+        hasVerifiedPhoneInProfile() &&
         request.resource.data.pasajero_id == request.auth.uid &&
         request.resource.data.estado == 'buscando' &&
         request.resource.data.conductor_id == null &&
@@ -138,7 +175,8 @@ service cloud.firestore {
             resource.data.pasajero_id == request.auth.uid &&
             !(resource.data.estado in ['completado', 'cancelada']) &&
             request.resource.data.estado == 'cancelada' &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado'])
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'cancelado_por', 'motivo_cancelacion']) &&
+            (!('cancelado_por' in request.resource.data) || request.resource.data.cancelado_por == 'pasajero')
           ) ||
           // C) Conductor asignado avanza el estado del viaje en orden secuencial
           (
@@ -150,23 +188,39 @@ service cloud.firestore {
               (resource.data.estado == 'en_curso' && request.resource.data.estado == 'completado')
             )
           ) ||
-          // D) Pasajero o conductor asignado registran calificación sobre un viaje completado
+          // C2) Conductor asignado cancela un viaje por imprevisto o inasistencia del pasajero
+          (
+            resource.data.conductor_id == request.auth.uid &&
+            resource.data.estado in ['aceptado', 'en_camino_origen', 'en_curso'] &&
+            request.resource.data.estado == 'cancelada' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estado', 'cancelado_por', 'motivo_cancelacion']) &&
+            (!('cancelado_por' in request.resource.data) || request.resource.data.cancelado_por == 'conductor')
+          ) ||
+          // D) Pasajero o conductor asignado registran calificación sobre un viaje completado (una sola vez)
           (
             resource.data.estado == 'completado' &&
             (
               (
                 resource.data.pasajero_id == request.auth.uid &&
+                resource.data.get('calificacion_conductor', null) == null &&
                 request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                   'calificacion_conductor',
                   'comentario_calificacion'
-                ])
+                ]) &&
+                request.resource.data.calificacion_conductor is number &&
+                request.resource.data.calificacion_conductor >= 1 &&
+                request.resource.data.calificacion_conductor <= 5
               ) ||
               (
                 resource.data.conductor_id == request.auth.uid &&
+                resource.data.get('calificacion_pasajero', null) == null &&
                 request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                   'calificacion_pasajero',
                   'comentario_calificacion'
-                ])
+                ]) &&
+                request.resource.data.calificacion_pasajero is number &&
+                request.resource.data.calificacion_pasajero >= 1 &&
+                request.resource.data.calificacion_pasajero <= 5
               )
             )
           )
@@ -180,7 +234,7 @@ service cloud.firestore {
       );
     }
 
-    // 3. Ofertas de conductores
+    // 3. Ofertas de conductores (solo conductores aprobados con teléfono verificado)
     match /ofertas_conductores/{ofertaId} {
       // Solo pueden leer la oferta el conductor que la emitió, el pasajero dueño de la solicitud o un admin.
       allow read: if isAuthenticated() && (
@@ -190,7 +244,7 @@ service cloud.firestore {
       );
 
       allow create: if isAdmin() || (
-        isAuthenticated() &&
+        isApprovedDriver() &&
         request.resource.data.conductor_id == request.auth.uid &&
         request.resource.data.precio is number &&
         request.resource.data.precio > 0 &&
@@ -198,62 +252,26 @@ service cloud.firestore {
         get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.estado == 'buscando'
       );
 
-      allow update, delete: if isAdmin() || (
+      allow update: if isAdmin() || (
+        isApprovedDriver() &&
+        resource.data.conductor_id == request.auth.uid &&
+        request.resource.data.conductor_id == resource.data.conductor_id &&
+        request.resource.data.solicitud_id == resource.data.solicitud_id &&
+        request.resource.data.precio is number &&
+        request.resource.data.precio > 0 &&
+        exists(/databases/$(database)/documents/solicitudes_viaje/$(resource.data.solicitud_id)) &&
+        get(/databases/$(database)/documents/solicitudes_viaje/$(resource.data.solicitud_id)).data.estado == 'buscando'
+      );
+
+      allow delete: if isAdmin() || (
         isAuthenticated() &&
         resource.data.conductor_id == request.auth.uid
       );
     }
 
-    // 4. Verificaciones de teléfono (OTP por SMS)
+    // 4. Verificaciones de teléfono (colección legada bloqueada para clientes; OTP vía Firebase Phone Auth)
     match /verificaciones_telefono/{userId} {
-      allow get: if isOwner(userId) || isAdmin();
-      allow list: if isAdmin();
-
-      // Solicitud inicial de OTP: requiere hash SHA-256 (64 caracteres hex), intentos = 0 y verificado = false.
-      allow create: if isAdmin() || (
-        isOwner(userId) &&
-        request.resource.data.usuario_id == userId &&
-        request.resource.data.intentos == 0 &&
-        request.resource.data.verificado == false &&
-        request.resource.data.codigo_hash is string &&
-        request.resource.data.codigo_hash.size() == 64 &&
-        !('codigo' in request.resource.data)
-      );
-
-      allow update: if isAdmin() || (
-        isOwner(userId) &&
-        request.resource.data.usuario_id == userId &&
-        !('codigo' in request.resource.data) &&
-        (
-          // Caso A: Generación de un nuevo código OTP (reinicia estado)
-          (
-            request.resource.data.intentos == 0 &&
-            request.resource.data.verificado == false &&
-            request.resource.data.codigo_hash is string &&
-            request.resource.data.codigo_hash.size() == 64
-          ) ||
-          // Caso B: Validación de intento o confirmación dentro del límite (máx 5 intentos)
-          (
-            resource.data.intentos < 5 &&
-            resource.data.verificado == false &&
-            request.resource.data.telefono == resource.data.telefono &&
-            request.resource.data.codigo_hash == resource.data.codigo_hash &&
-            request.resource.data.expira_en == resource.data.expira_en &&
-            (
-              (
-                request.resource.data.verificado == false &&
-                request.resource.data.intentos == resource.data.intentos + 1
-              ) ||
-              (
-                request.resource.data.verificado == true &&
-                request.resource.data.intentos == resource.data.intentos
-              )
-            )
-          )
-        )
-      );
-
-      allow delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // 5. Configuración global de la plataforma (tarifas y comisiones)
@@ -272,24 +290,32 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 6. Calificaciones mutuas de viajes
+    // 6. Calificaciones mutuas de viajes (inmutables por cliente una vez creadas)
     match /calificaciones_viaje/{calificacionId} {
       allow read: if isAuthenticated();
-      allow create, update: if isAdmin() || (
+      allow create: if isAdmin() || (
         isAuthenticated() &&
         request.resource.data.evaluador_id == request.auth.uid &&
         request.resource.data.estrellas is number &&
         request.resource.data.estrellas >= 1 &&
         request.resource.data.estrellas <= 5 &&
         request.resource.data.solicitud_id is string &&
+        request.resource.data.rol_evaluador in ['pasajero', 'conductor'] &&
+        calificacionId == request.resource.data.solicitud_id + '_' + request.resource.data.rol_evaluador &&
         exists(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)) &&
         get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.estado == 'completado' &&
         (
-          get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.pasajero_id == request.auth.uid ||
-          get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.conductor_id == request.auth.uid
+          (
+            request.resource.data.rol_evaluador == 'pasajero' &&
+            get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.pasajero_id == request.auth.uid
+          ) ||
+          (
+            request.resource.data.rol_evaluador == 'conductor' &&
+            get(/databases/$(database)/documents/solicitudes_viaje/$(request.resource.data.solicitud_id)).data.conductor_id == request.auth.uid
+          )
         )
       );
-      allow delete: if isAdmin();
+      allow update, delete: if isAdmin();
     }
   }
 }

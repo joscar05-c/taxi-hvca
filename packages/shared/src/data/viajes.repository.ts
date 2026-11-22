@@ -7,8 +7,6 @@ import {
   onSnapshot,
   query,
   runTransaction,
-  setDoc,
-  updateDoc,
   where,
 } from 'firebase/firestore';
 
@@ -334,7 +332,13 @@ export const viajesRepository = {
   /**
    * Cancela una solicitud de viaje de forma atómica verificando que no haya sido completada.
    */
-  async cancelarSolicitud(solicitudId: string): Promise<SolicitudViaje> {
+  async cancelarSolicitud(
+    solicitudId: string,
+    opciones?: {
+      canceladoPor?: 'pasajero' | 'conductor' | 'admin';
+      motivo?: string;
+    },
+  ): Promise<SolicitudViaje> {
     const docRef = doc(db, COLECCION_SOLICITUDES, solicitudId);
 
     return runTransaction(db, async (transaction) => {
@@ -351,11 +355,29 @@ export const viajesRepository = {
         return { id: snap.id, ...actual };
       }
 
-      transaction.update(docRef, { estado: 'cancelada' });
+      if (
+        opciones?.canceladoPor === 'conductor' &&
+        actual.estado !== 'aceptado' &&
+        actual.estado !== 'en_camino_origen' &&
+        actual.estado !== 'en_curso'
+      ) {
+        throw new Error(
+          'Solo puedes cancelar un viaje que ya te haya sido asignado.',
+        );
+      }
+
+      const motivoLimpio = opciones?.motivo?.trim();
+      const updates: Partial<SolicitudViaje> = {
+        estado: 'cancelada',
+        ...(opciones?.canceladoPor ? { cancelado_por: opciones.canceladoPor } : {}),
+        ...(motivoLimpio ? { motivo_cancelacion: motivoLimpio } : {}),
+      };
+
+      transaction.update(docRef, updates);
       return {
         id: snap.id,
         ...actual,
-        estado: 'cancelada',
+        ...updates,
       };
     });
   },
@@ -519,6 +541,40 @@ export const viajesRepository = {
   },
 
   /**
+   * Recupera los IDs de solicitudes que siguen en estado `buscando` para las cuales
+   * el conductor ya envió una oferta (evita perder seguimiento al reabrir la app).
+   */
+  async obtenerOfertasPendientesConductor(
+    conductorId: string,
+  ): Promise<string[]> {
+    const q = query(
+      collection(db, COLECCION_OFERTAS),
+      where('conductor_id', '==', conductorId),
+    );
+    const snap = await getDocs(q);
+    const solicitudIds = new Set<string>();
+    snap.forEach((d) => {
+      const data = d.data() as Partial<OfertaConductor>;
+      if (typeof data.solicitud_id === 'string' && data.solicitud_id) {
+        solicitudIds.add(data.solicitud_id);
+      }
+    });
+
+    const verificaciones = await Promise.all(
+      Array.from(solicitudIds).map(async (id) => {
+        const sSnap = await getDoc(doc(db, COLECCION_SOLICITUDES, id)).catch(
+          () => null,
+        );
+        if (!sSnap || !sSnap.exists()) return null;
+        const sol = sSnap.data() as Omit<SolicitudViaje, 'id'>;
+        return sol.estado === 'buscando' ? id : null;
+      }),
+    );
+
+    return verificaciones.filter((id): id is string => Boolean(id));
+  },
+
+  /**
    * Se suscribe en tiempo real al historial de viajes del usuario (ordenado del más reciente al más antiguo).
    */
   suscribirHistorialViajes(
@@ -551,8 +607,8 @@ export const viajesRepository = {
   },
 
   /**
-   * Registra la calificación mutua de un viaje completado, actualiza el documento
-   * de solicitud y recalcula `calificacion_promedio` en el perfil evaluado.
+   * Registra la calificación mutua de un viaje completado en una única transacción
+   * atómica, impidiendo calificaciones duplicadas y recalculando el promedio.
    */
   async calificarViaje(params: {
     solicitudId: string;
@@ -567,55 +623,82 @@ export const viajesRepository = {
     const calificacionId = `${params.solicitudId}_${params.rolEvaluador}`;
     const comentarioLimpio = params.comentario?.trim() || null;
 
-    const calificacionDoc: Omit<CalificacionViaje, 'id'> = {
-      solicitud_id: params.solicitudId,
-      evaluador_id: params.evaluadorId,
-      evaluado_id: params.evaluadoId,
-      rol_evaluador: params.rolEvaluador,
-      estrellas: estrellasValidas,
-      comentario: comentarioLimpio,
-      created_at: ahora,
-    };
-
-    await setDoc(
-      doc(db, COLECCION_CALIFICACIONES, calificacionId),
-      calificacionDoc,
-      { merge: true },
-    );
-
-    const campoSolicitud =
-      params.rolEvaluador === 'pasajero'
-        ? 'calificacion_conductor'
-        : 'calificacion_pasajero';
-
-    await updateDoc(doc(db, COLECCION_SOLICITUDES, params.solicitudId), {
-      [campoSolicitud]: estrellasValidas,
-      ...(comentarioLimpio ? { comentario_calificacion: comentarioLimpio } : {}),
-    });
-
+    const calificacionRef = doc(db, COLECCION_CALIFICACIONES, calificacionId);
+    const solicitudRef = doc(db, COLECCION_SOLICITUDES, params.solicitudId);
     const perfilRef = doc(db, COLECCION_PERFILES, params.evaluadoId);
-    const perfilSnap = await getDoc(perfilRef);
-    if (perfilSnap.exists()) {
-      const data = perfilSnap.data() as Profile;
-      const totalPrevio =
-        typeof data.total_calificaciones === 'number' && data.total_calificaciones > 0
-          ? data.total_calificaciones
-          : 1;
-      const promedioPrevio =
-        typeof data.calificacion_promedio === 'number'
-          ? data.calificacion_promedio
-          : 5.0;
-      const nuevoTotal = totalPrevio + 1;
-      const nuevoPromedio =
-        Math.round(
-          ((promedioPrevio * totalPrevio + estrellasValidas) / nuevoTotal) * 100,
-        ) / 100;
 
-      await updateDoc(perfilRef, {
-        calificacion_promedio: nuevoPromedio,
-        total_calificaciones: nuevoTotal,
-        updated_at: ahora,
+    await runTransaction(db, async (transaction) => {
+      // Todas las lecturas antes de cualquier escritura (requisito de Firestore)
+      const [calificacionSnap, solicitudSnap, perfilSnap] = await Promise.all([
+        transaction.get(calificacionRef),
+        transaction.get(solicitudRef),
+        transaction.get(perfilRef),
+      ]);
+
+      if (calificacionSnap.exists()) {
+        throw new Error('Ya registraste tu calificación para este viaje.');
+      }
+
+      if (!solicitudSnap.exists()) {
+        throw new Error('No se encontró la solicitud de viaje.');
+      }
+
+      const solicitudData = solicitudSnap.data() as Omit<SolicitudViaje, 'id'>;
+      if (solicitudData.estado !== 'completado') {
+        throw new Error('Solo puedes calificar viajes completados.');
+      }
+
+      const calificacionExistente =
+        params.rolEvaluador === 'pasajero'
+          ? solicitudData.calificacion_conductor
+          : solicitudData.calificacion_pasajero;
+      if (calificacionExistente != null) {
+        throw new Error('Este viaje ya fue calificado.');
+      }
+
+      const calificacionDoc: Omit<CalificacionViaje, 'id'> = {
+        solicitud_id: params.solicitudId,
+        evaluador_id: params.evaluadorId,
+        evaluado_id: params.evaluadoId,
+        rol_evaluador: params.rolEvaluador,
+        estrellas: estrellasValidas,
+        comentario: comentarioLimpio,
+        created_at: ahora,
+      };
+
+      const campoSolicitud =
+        params.rolEvaluador === 'pasajero'
+          ? 'calificacion_conductor'
+          : 'calificacion_pasajero';
+
+      transaction.set(calificacionRef, calificacionDoc);
+      transaction.update(solicitudRef, {
+        [campoSolicitud]: estrellasValidas,
+        ...(comentarioLimpio ? { comentario_calificacion: comentarioLimpio } : {}),
       });
-    }
+
+      if (perfilSnap.exists()) {
+        const data = perfilSnap.data() as Profile;
+        const totalPrevio =
+          typeof data.total_calificaciones === 'number' && data.total_calificaciones > 0
+            ? data.total_calificaciones
+            : 1;
+        const promedioPrevio =
+          typeof data.calificacion_promedio === 'number'
+            ? data.calificacion_promedio
+            : 5.0;
+        const nuevoTotal = totalPrevio + 1;
+        const nuevoPromedio =
+          Math.round(
+            ((promedioPrevio * totalPrevio + estrellasValidas) / nuevoTotal) * 100,
+          ) / 100;
+
+        transaction.update(perfilRef, {
+          calificacion_promedio: nuevoPromedio,
+          total_calificaciones: nuevoTotal,
+          updated_at: ahora,
+        });
+      }
+    });
   },
 };

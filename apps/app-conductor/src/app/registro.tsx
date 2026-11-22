@@ -21,7 +21,7 @@ import {
 } from '@hvca/shared';
 
 export default function PantallaRegistro() {
-  const { session } = useAuthStore();
+  const { session, authError, setAuthError } = useAuthStore();
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
@@ -35,7 +35,7 @@ export default function PantallaRegistro() {
     error: errorGoogle,
   } = useGoogleLogin('conductor');
 
-  const errorVisible = error || errorGoogle;
+  const errorVisible = error || errorGoogle || authError;
 
   if (session) {
     return <Redirect href="/(tabs)/inicio" />;
@@ -43,6 +43,7 @@ export default function PantallaRegistro() {
 
   async function registrar() {
     setError(null);
+    setAuthError(null);
 
     if (!nombre.trim() || !email.trim() || !telefono.trim() || !password) {
       setError('Completa todos los campos.');
@@ -83,7 +84,10 @@ export default function PantallaRegistro() {
 
           {/* Botón de Google Principal */}
           <BotonGoogle
-            onPress={iniciarConGoogle}
+            onPress={() => {
+              setAuthError(null);
+              void iniciarConGoogle();
+            }}
             cargando={cargandoGoogle}
             label="Registrarse con Google"
           />

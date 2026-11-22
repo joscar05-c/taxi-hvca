@@ -112,6 +112,8 @@ export type SolicitudViaje = {
   calificacion_conductor?: number | null;
   calificacion_pasajero?: number | null;
   comentario_calificacion?: string | null;
+  cancelado_por?: 'pasajero' | 'conductor' | 'admin' | null;
+  motivo_cancelacion?: string | null;
   created_at: string;
 };
 

@@ -23,7 +23,7 @@ export interface ForegroundLocationResult {
   /** Indica si la escucha continua (`watchPositionAsync`) está activa. */
   watching: boolean;
   error: string | null;
-  requestPermissionAndLocate: () => Promise<boolean>;
+  requestPermissionAndLocate: () => Promise<Location.LocationObjectCoords | null>;
 }
 
 /**
@@ -47,40 +47,49 @@ export function useForegroundLocation(
   const [watching, setWatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const requestPermissionAndLocate = useCallback(async (): Promise<boolean> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { status: nuevoStatus } =
-        await Location.requestForegroundPermissionsAsync();
-      setStatus(nuevoStatus);
-
-      if (nuevoStatus !== 'granted') {
-        setError(
-          'Permiso de ubicación denegado. Actívalo en los ajustes de tu teléfono.',
-        );
-        return false;
-      }
-
+  const requestPermissionAndLocate = useCallback(
+    async (): Promise<Location.LocationObjectCoords | null> => {
+      setLoading(true);
+      setError(null);
+      let ultimaCoords: Location.LocationObjectCoords | null = null;
       try {
-        const ultima = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
-        if (ultima?.coords) {
-          setCoords((prev) => prev ?? ultima.coords);
-        }
-      } catch {
-        // Algunos emuladores no tienen caché previa; continuamos con getCurrentPositionAsync
-      }
+        const { status: nuevoStatus } =
+          await Location.requestForegroundPermissionsAsync();
+        setStatus(nuevoStatus);
 
-      const pos = await Location.getCurrentPositionAsync({ accuracy });
-      setCoords(pos.coords);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo obtener la ubicación.');
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }, [accuracy]);
+        if (nuevoStatus !== 'granted') {
+          setError(
+            'Permiso de ubicación denegado. Actívalo en los ajustes de tu teléfono.',
+          );
+          return null;
+        }
+
+        try {
+          const ultima = await Location.getLastKnownPositionAsync({
+            maxAge: 120_000,
+          });
+          if (ultima?.coords) {
+            ultimaCoords = ultima.coords;
+            setCoords((prev) => prev ?? ultima.coords);
+          }
+        } catch {
+          // Algunos emuladores no tienen caché previa; continuamos con getCurrentPositionAsync
+        }
+
+        const pos = await Location.getCurrentPositionAsync({ accuracy });
+        setCoords(pos.coords);
+        return pos.coords;
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message : 'No se pudo obtener la ubicación.',
+        );
+        return ultimaCoords;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [accuracy],
+  );
 
   useEffect(() => {
     if (!watch || status !== 'granted') {

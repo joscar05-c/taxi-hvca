@@ -31,13 +31,20 @@ export default function PantallaPerfilConductor() {
   const [exitoDocs, setExitoDocs] = useState<string | null>(null);
 
   useEffect(() => {
-    if (perfil) {
-      if (perfil.vehiculo) setVehiculo(perfil.vehiculo);
-      if (perfil.dni_conductor) setDni(perfil.dni_conductor);
-      if (perfil.licencia_conductor) setLicencia(perfil.licencia_conductor);
-      if (perfil.soat_conductor) setSoat(perfil.soat_conductor);
-    }
-  }, [perfil]);
+    if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
+  }, [perfil?.vehiculo]);
+
+  useEffect(() => {
+    if (perfil?.dni_conductor) setDni(perfil.dni_conductor);
+  }, [perfil?.dni_conductor]);
+
+  useEffect(() => {
+    if (perfil?.licencia_conductor) setLicencia(perfil.licencia_conductor);
+  }, [perfil?.licencia_conductor]);
+
+  useEffect(() => {
+    if (perfil?.soat_conductor) setSoat(perfil.soat_conductor);
+  }, [perfil?.soat_conductor]);
 
   if (!session) {
     return <Redirect href="/login" />;
@@ -73,8 +80,13 @@ export default function PantallaPerfilConductor() {
         soat_conductor: soat,
       });
       setPerfil(actualizado);
-      setExitoDocs('Documentación y vehículo actualizados correctamente.');
-      Alert.alert('¡Guardado!', 'Tus documentos de conductor están aprobados.');
+      setExitoDocs(
+        'Documentación enviada a revisión. Un administrador validará tu cuenta pronto.',
+      );
+      Alert.alert(
+        'Documentos enviados',
+        'Tus documentos fueron enviados para revisión por un administrador.',
+      );
     } catch (e: any) {
       setErrorDocs(e.message || 'No se pudieron guardar los documentos.');
     } finally {
@@ -110,7 +122,50 @@ export default function PantallaPerfilConductor() {
     .slice(0, 2)
     .toUpperCase();
 
-  const docsAprobados = perfil?.estado_documentos === 'aprobado';
+  const estadoDocs = perfil?.estado_documentos ?? 'pendiente';
+  const infoDocs = (() => {
+    switch (estadoDocs) {
+      case 'aprobado':
+        return {
+          etiqueta: 'APROBADO',
+          badgeStyle: styles.badgeDocsOk,
+          textoStyle: styles.textoBadgeDocsOk,
+          avisoStyle: null,
+          avisoTextoStyle: null,
+          mensaje: null,
+        };
+      case 'en_revision':
+        return {
+          etiqueta: 'EN REVISIÓN',
+          badgeStyle: styles.badgeDocsRevision,
+          textoStyle: styles.textoBadgeDocsRevision,
+          avisoStyle: styles.avisoDocsRevision,
+          avisoTextoStyle: styles.textoAvisoDocsRevision,
+          mensaje:
+            '⏳ Tus documentos están siendo revisados por el equipo de Taxi HVCA. Podrás conectarte y ofertar apenas sean aprobados.',
+        };
+      case 'rechazado':
+        return {
+          etiqueta: 'RECHAZADO',
+          badgeStyle: styles.badgeDocsRechazado,
+          textoStyle: styles.textoBadgeDocsRechazado,
+          avisoStyle: styles.avisoDocsRechazado,
+          avisoTextoStyle: styles.textoAvisoDocsRechazado,
+          mensaje:
+            '❌ Tu documentación fue observada o rechazada. Verifica tus datos de vehículo, DNI, brevete y SOAT y vuelve a enviarlos.',
+        };
+      default:
+        return {
+          etiqueta: 'PENDIENTE',
+          badgeStyle: styles.badgeDocsPendiente,
+          textoStyle: styles.textoBadgeDocsPendiente,
+          avisoStyle: styles.avisoDocsPendiente,
+          avisoTextoStyle: styles.textoAvisoDocsPendiente,
+          mensaje:
+            '📄 Completa tu vehículo, DNI, brevete y SOAT para enviar tu cuenta a validación.',
+        };
+    }
+  })();
 
   return (
     <PantallaCentrada>
@@ -159,24 +214,20 @@ export default function PantallaPerfilConductor() {
         <View style={styles.cardVehiculo}>
           <View style={styles.cabeceraDocs}>
             <Text style={styles.tituloSeccion}>Documentación y Vehículo (KYC)</Text>
-            <View
-              style={[
-                styles.badgeDocs,
-                docsAprobados ? styles.badgeDocsOk : styles.badgeDocsPendiente,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.textoBadgeDocs,
-                  docsAprobados
-                    ? styles.textoBadgeDocsOk
-                    : styles.textoBadgeDocsPendiente,
-                ]}
-              >
-                {docsAprobados ? 'APROBADO' : 'PENDIENTE'}
+            <View style={[styles.badgeDocs, infoDocs.badgeStyle]}>
+              <Text style={[styles.textoBadgeDocs, infoDocs.textoStyle]}>
+                {infoDocs.etiqueta}
               </Text>
             </View>
           </View>
+
+          {infoDocs.mensaje && infoDocs.avisoStyle && infoDocs.avisoTextoStyle ? (
+            <View style={[styles.avisoDocsBase, infoDocs.avisoStyle]}>
+              <Text style={[styles.textoAvisoDocsBase, infoDocs.avisoTextoStyle]}>
+                {infoDocs.mensaje}
+              </Text>
+            </View>
+          ) : null}
 
           {exitoDocs ? <Text style={styles.exito}>{exitoDocs}</Text> : null}
           {errorDocs ? <Text style={styles.error}>{errorDocs}</Text> : null}
@@ -357,6 +408,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF3C7',
     borderColor: '#F59E0B',
   },
+  badgeDocsRevision: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#3B82F6',
+  },
+  badgeDocsRechazado: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#EF4444',
+  },
   textoBadgeDocs: {
     fontSize: 10,
     fontWeight: '800',
@@ -366,6 +425,43 @@ const styles = StyleSheet.create({
   },
   textoBadgeDocsPendiente: {
     color: '#92400E',
+  },
+  textoBadgeDocsRevision: {
+    color: '#1E40AF',
+  },
+  textoBadgeDocsRechazado: {
+    color: '#991B1B',
+  },
+  avisoDocsBase: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+  },
+  avisoDocsPendiente: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FCD34D',
+  },
+  avisoDocsRevision: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#93C5FD',
+  },
+  avisoDocsRechazado: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+  },
+  textoAvisoDocsBase: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  textoAvisoDocsPendiente: {
+    color: '#92400E',
+  },
+  textoAvisoDocsRevision: {
+    color: '#1E3A8A',
+  },
+  textoAvisoDocsRechazado: {
+    color: '#991B1B',
   },
   campoDoc: {
     marginBottom: 12,

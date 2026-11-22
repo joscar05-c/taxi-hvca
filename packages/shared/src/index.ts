@@ -6,7 +6,7 @@ export * from './domain/fare';
 export { app, auth, db, firebaseConfig } from './data/firebaseClient';
 export { getFirebaseEnvVars } from './data/firebase';
 export type { FirebaseEnvVars } from './data/firebase';
-export { authRepository } from './data/auth.repository';
+export { authRepository, normalizarTelefonoPeruE164 } from './data/auth.repository';
 export { viajesRepository } from './data/viajes.repository';
 
 // Utilidades

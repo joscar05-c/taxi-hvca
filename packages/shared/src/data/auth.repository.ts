@@ -1,10 +1,12 @@
-import * as Crypto from 'expo-crypto';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
   GoogleAuthProvider,
+  PhoneAuthProvider,
   signInWithCredential,
+  updatePhoneNumber,
+  type ApplicationVerifier,
   type User,
 } from 'firebase/auth';
 import {
@@ -15,35 +17,55 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 
-import type { Profile, RiderStatus, VerificacionTelefono } from '../domain/types';
+import type { Profile, RiderStatus } from '../domain/types';
 import { auth, db } from './firebaseClient';
 
 const COLECCION_PERFILES = 'perfiles';
-const COLECCION_VERIFICACIONES = 'verificaciones_telefono';
-const MAX_INTENTOS_OTP = 5;
-const COOLDOWN_REENVIO_MS = 60 * 1000;
 
-function esEntornoDesarrollo(): boolean {
-  const g = globalThis as { __DEV__?: boolean; process?: { env?: { NODE_ENV?: string } } };
-  if (typeof g.__DEV__ === 'boolean') return g.__DEV__;
-  return g.process?.env?.NODE_ENV !== 'production';
+/**
+ * Valida un número celular peruano (9 dígitos iniciando en 9, con o sin prefijo +51)
+ * y lo devuelve normalizado en formato E.164 estricto (`+519XXXXXXXX`).
+ */
+export function normalizarTelefonoPeruE164(numeroTelefono: string): string {
+  const telLimpio = numeroTelefono.trim().replace(/[\s\-()]+/g, '');
+  if (!/^(?:\+?51)?9\d{8}$/.test(telLimpio)) {
+    throw new Error(
+      'Ingresa un número de celular peruano válido (9 dígitos comenzando con 9).',
+    );
+  }
+  const soloDigitos = telLimpio.replace(/^\+?51/, '');
+  return `+51${soloDigitos}`;
 }
 
-async function generarCodigoOtpSeguro(): Promise<string> {
-  const bytes = await Crypto.getRandomBytesAsync(4);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const numero = view.getUint32(0, false) % 900000;
-  return (100000 + numero).toString();
+function traducirErrorPhoneAuth(error: unknown): string {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+
+  switch (code) {
+    case 'auth/invalid-verification-code':
+      return 'El código SMS ingresado es incorrecto. Verifica e inténtalo nuevamente.';
+    case 'auth/code-expired':
+    case 'auth/session-expired':
+      return 'El código SMS ha expirado. Solicita un nuevo código.';
+    case 'auth/credential-already-in-use':
+      return 'Este número de celular ya está vinculado a otra cuenta.';
+    case 'auth/requires-recent-login':
+      return 'Por seguridad, cierra sesión y vuelve a iniciar sesión antes de cambiar tu número.';
+    case 'auth/too-many-requests':
+      return 'Demasiados intentos realizados. Espera unos minutos antes de volver a intentarlo.';
+    default:
+      return error instanceof Error
+        ? error.message
+        : 'No se pudo validar el código SMS.';
+  }
 }
 
-async function calcularHashOtp(
-  usuarioId: string,
-  telefono: string,
-  codigo: string,
-): Promise<string> {
-  return Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    `${usuarioId}:${telefono}:${codigo}`,
+function errorRolIncompatible(rolExistente: Profile['rol']): Error {
+  const appDestino = rolExistente === 'conductor' ? 'Conductor' : 'Pasajero';
+  return new Error(
+    `Esta cuenta está registrada como ${rolExistente}. Ingresa desde la aplicación de ${appDestino}.`,
   );
 }
 
@@ -76,15 +98,28 @@ export const authRepository = {
   },
 
   /**
-   * Inicia sesión con correo y contraseña en Firebase Auth.
+   * Inicia sesión con correo y contraseña en Firebase Auth, validando opcionalmente
+   * que el rol del perfil coincida con la aplicación actual.
    */
-  async iniciarSesionConEmail(email: string, password: string): Promise<User> {
+  async iniciarSesionConEmail(
+    email: string,
+    password: string,
+    rolEsperado?: Profile['rol'],
+  ): Promise<User> {
     const cred = await signInWithEmailAndPassword(auth, email, password);
+    if (rolEsperado) {
+      const perfil = await this.obtenerPerfil(cred.user.uid);
+      if (perfil && perfil.rol !== rolEsperado) {
+        await signOut(auth);
+        throw errorRolIncompatible(perfil.rol);
+      }
+    }
     return cred.user;
   },
 
   /**
    * Inicia sesión o registra usuario mediante Google Sign-In con su idToken.
+   * Impide usar una cuenta de otro rol en la app equivocada.
    */
   async iniciarSesionConGoogle(
     idToken: string,
@@ -96,6 +131,11 @@ export const authRepository = {
 
     // Verificar si ya tiene perfil en Firestore
     let perfil = await this.obtenerPerfil(user.uid);
+    if (perfil && perfil.rol !== rolPorDefecto) {
+      await signOut(auth);
+      throw errorRolIncompatible(perfil.rol);
+    }
+
     if (!perfil) {
       perfil = await this.crearPerfil(user.uid, {
         nombre: user.displayName || user.email?.split('@')[0] || 'Usuario',
@@ -103,7 +143,7 @@ export const authRepository = {
         rol: rolPorDefecto,
         email: user.email,
         foto_url: user.photoURL,
-        telefono_verificado: !!user.phoneNumber,
+        telefono_verificado: Boolean(user.phoneNumber),
       });
     }
 
@@ -167,7 +207,7 @@ export const authRepository = {
       rol: rolSeguro,
       nombre: datos.nombre,
       telefono: datos.telefono,
-      telefono_verificado: datos.telefono_verificado ?? false,
+      telefono_verificado: Boolean(datos.telefono_verificado),
       email: datos.email ?? null,
       foto_url: datos.foto_url ?? null,
       calificacion_promedio: 5.0,
@@ -178,6 +218,7 @@ export const authRepository = {
       ubicacion_lat: null,
       ubicacion_lng: null,
       vehiculo: datos.vehiculo ?? null,
+      ...(rolSeguro === 'conductor' ? { estado_documentos: 'pendiente' as const } : {}),
       created_at: ahora,
       updated_at: ahora,
     };
@@ -187,139 +228,96 @@ export const authRepository = {
   },
 
   /**
-   * Genera y registra un código OTP de 6 dígitos (almacenado como hash SHA-256)
-   * para verificar el teléfono del usuario.
-   * Solo en desarrollo devuelve `codigoSimuladoParaDev` para pruebas locales.
+   * Envía un SMS real mediante Firebase Phone Auth en entorno web (usando RecaptchaVerifier).
    */
-  async solicitarCodigoVerificacionTelefono(
+  async enviarCodigoSmsWeb(
     numeroTelefono: string,
-  ): Promise<{ codigoSimuladoParaDev: string | null; expiraEn: string }> {
+    appVerifier: ApplicationVerifier,
+  ): Promise<{ verificationId: string; telefonoE164: string }> {
     const user = auth.currentUser;
     if (!user) throw new Error('Debes iniciar sesión para verificar tu teléfono.');
 
-    const telLimpio = numeroTelefono.trim().replace(/[\s\-()]+/g, '');
-    if (!/^(?:\+?51)?9\d{8}$/.test(telLimpio)) {
-      throw new Error('Ingresa un número de celular peruano válido (9 dígitos comenzando con 9).');
+    const telefonoE164 = normalizarTelefonoPeruE164(numeroTelefono);
+    const provider = new PhoneAuthProvider(auth);
+    try {
+      const verificationId = await provider.verifyPhoneNumber(
+        telefonoE164,
+        appVerifier,
+      );
+      return { verificationId, telefonoE164 };
+    } catch (error) {
+      throw new Error(traducirErrorPhoneAuth(error));
     }
-
-    const verifDocRef = doc(db, COLECCION_VERIFICACIONES, user.uid);
-    const verifPrevia = await getDoc(verifDocRef);
-    const ahora = new Date();
-
-    if (verifPrevia.exists()) {
-      const previaData = verifPrevia.data() as VerificacionTelefono;
-      const creadoMs = Date.parse(previaData.created_at);
-      if (
-        !previaData.verificado &&
-        Number.isFinite(creadoMs) &&
-        ahora.getTime() - creadoMs < COOLDOWN_REENVIO_MS
-      ) {
-        const segsRestantes = Math.ceil(
-          (COOLDOWN_REENVIO_MS - (ahora.getTime() - creadoMs)) / 1000,
-        );
-        throw new Error(
-          `Por favor espera ${segsRestantes} segundos antes de solicitar un nuevo código.`,
-        );
-      }
-    }
-
-    // Normalizar a formato nacional/internacional
-    const soloDigitos = telLimpio.replace(/^\+?51/, '');
-    const telNormalizado = `+51 ${soloDigitos}`;
-
-    const esDev = esEntornoDesarrollo();
-    const esNumeroPrueba =
-      esDev &&
-      (soloDigitos === '999999999' ||
-        soloDigitos === '987654321' ||
-        soloDigitos === '999888777');
-    const codigo = esNumeroPrueba
-      ? '123456'
-      : await generarCodigoOtpSeguro();
-    const codigoHash = await calcularHashOtp(user.uid, telNormalizado, codigo);
-    const expiraEn = new Date(ahora.getTime() + 10 * 60 * 1000).toISOString(); // 10 min
-
-    await setDoc(verifDocRef, {
-      usuario_id: user.uid,
-      telefono: telNormalizado,
-      codigo_hash: codigoHash,
-      expira_en: expiraEn,
-      intentos: 0,
-      verificado: false,
-      created_at: ahora.toISOString(),
-    });
-
-    return {
-      codigoSimuladoParaDev: esDev ? codigo : null,
-      expiraEn,
-    };
   },
 
   /**
-   * Confirma el código OTP ingresado por el usuario comparando su hash SHA-256,
-   * aplicando límite de intentos (anti fuerza bruta) y marcando el teléfono como verificado.
+   * Si Firebase Auth ya tiene un `phoneNumber` vinculado al usuario actual,
+   * refresca el token y sincroniza `perfiles/{uid}` con dicho número.
    */
-  async confirmarCodigoTelefono(codigoIngresado: string): Promise<Profile> {
+  async sincronizarTelefonoYaVerificadoEnAuth(): Promise<Profile | null> {
+    const user = auth.currentUser;
+    if (!user || !user.phoneNumber) return null;
+
+    await user.getIdToken(true);
+    const perfilDocRef = doc(db, COLECCION_PERFILES, user.uid);
+    const ahora = new Date().toISOString();
+    await updateDoc(perfilDocRef, {
+      telefono: user.phoneNumber,
+      telefono_verificado: true,
+      updated_at: ahora,
+    });
+
+    return this.obtenerPerfil(user.uid);
+  },
+
+  /**
+   * Confirma el código SMS de 6 dígitos emitido por Firebase Phone Auth,
+   * vincula el número a Firebase Auth (`updatePhoneNumber`), refresca el token JWT
+   * y actualiza `perfiles/{uid}` (validado por las reglas con `request.auth.token.phone_number`).
+   */
+  async confirmarCodigoTelefonoFirebase(
+    verificationId: string,
+    codigoIngresado: string,
+    telefonoE164: string,
+  ): Promise<Profile> {
     const user = auth.currentUser;
     if (!user) throw new Error('Sesión no iniciada.');
+
+    const verifLimpio = verificationId.trim();
+    if (!verifLimpio) {
+      throw new Error(
+        'No hay solicitud de verificación activa. Solicita un nuevo código SMS.',
+      );
+    }
 
     const codigoLimpio = codigoIngresado.trim();
     if (!/^\d{6}$/.test(codigoLimpio)) {
       throw new Error('El código debe tener 6 dígitos numéricos.');
     }
 
-    const verifDocRef = doc(db, COLECCION_VERIFICACIONES, user.uid);
-    const verifSnap = await getDoc(verifDocRef);
+    const telefonoNormalizado = normalizarTelefonoPeruE164(telefonoE164);
+    const credential = PhoneAuthProvider.credential(verifLimpio, codigoLimpio);
 
-    if (!verifSnap.exists()) {
-      throw new Error('No hay solicitud de código activa. Solicita un nuevo código primero.');
+    try {
+      await updatePhoneNumber(user, credential);
+    } catch (error) {
+      throw new Error(traducirErrorPhoneAuth(error));
     }
 
-    const data = verifSnap.data() as VerificacionTelefono;
-    if (data.verificado) {
-      const perfilActual = await this.obtenerPerfil(user.uid);
-      if (perfilActual) return perfilActual;
-    }
+    await user.getIdToken(true);
 
-    const intentosActuales = data.intentos ?? 0;
-    if (intentosActuales >= MAX_INTENTOS_OTP) {
-      throw new Error(
-        'Has superado el número máximo de intentos permitidos. Solicita un nuevo código.',
-      );
-    }
-
-    if (new Date() > new Date(data.expira_en)) {
-      throw new Error('El código ha expirado. Por favor solicita uno nuevo.');
-    }
-
-    const hashIngresado = await calcularHashOtp(user.uid, data.telefono, codigoLimpio);
-    const coincideHash = Boolean(data.codigo_hash && data.codigo_hash === hashIngresado);
-
-    if (!coincideHash) {
-      const nuevosIntentos = intentosActuales + 1;
-      await updateDoc(verifDocRef, { intentos: nuevosIntentos });
-      const restantes = Math.max(0, MAX_INTENTOS_OTP - nuevosIntentos);
-      throw new Error(
-        restantes > 0
-          ? `Código de verificación incorrecto. Te quedan ${restantes} intento(s).`
-          : 'Código incorrecto. Has agotado tus intentos; solicita un nuevo código.',
-      );
-    }
-
-    // Código válido: marcar verificado en Firestore antes de actualizar el perfil
-    await updateDoc(verifDocRef, { verificado: true });
-
-    // Actualizar perfil del usuario (las reglas de Firestore verifican que verificado == true)
     const perfilDocRef = doc(db, COLECCION_PERFILES, user.uid);
     const ahora = new Date().toISOString();
     await updateDoc(perfilDocRef, {
-      telefono: data.telefono,
+      telefono: user.phoneNumber ?? telefonoNormalizado,
       telefono_verificado: true,
       updated_at: ahora,
     });
 
     const actualizado = await this.obtenerPerfil(user.uid);
-    if (!actualizado) throw new Error('No se pudo recuperar el perfil actualizado.');
+    if (!actualizado) {
+      throw new Error('No se pudo recuperar el perfil actualizado.');
+    }
     return actualizado;
   },
 
@@ -406,7 +404,7 @@ export const authRepository = {
       dni_conductor: datos.dni_conductor.trim(),
       licencia_conductor: datos.licencia_conductor.trim(),
       soat_conductor: datos.soat_conductor.trim(),
-      estado_documentos: 'aprobado',
+      estado_documentos: 'en_revision',
       updated_at: ahora,
     });
 

@@ -46,6 +46,15 @@ export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLogin
         const cred = await signInWithPopup(auth, new GoogleAuthProvider());
         const user = cred.user;
         const existente = await authRepository.obtenerPerfil(user.uid);
+        if (existente && existente.rol !== rol) {
+          await authRepository.cerrarSesion();
+          const appDestino =
+            existente.rol === 'conductor' ? 'Conductor' : 'Pasajero';
+          setError(
+            `Esta cuenta está registrada como ${existente.rol}. Ingresa desde la aplicación de ${appDestino}.`,
+          );
+          return;
+        }
         if (!existente) {
           await authRepository.crearPerfil(user.uid, {
             nombre: user.displayName || user.email?.split('@')[0] || 'Usuario',
@@ -95,7 +104,12 @@ export function useGoogleLogin(rol: Profile['rol'] = 'pasajero'): UseGoogleLogin
         return;
       }
 
-      await authRepository.iniciarSesionConGoogle(idToken, rol);
+      try {
+        await authRepository.iniciarSesionConGoogle(idToken, rol);
+      } catch (err) {
+        await GoogleSignin.signOut().catch(() => undefined);
+        throw err;
+      }
     } catch (e: unknown) {
       if (isErrorWithCode(e)) {
         switch (e.code) {

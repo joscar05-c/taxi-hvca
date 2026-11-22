@@ -21,10 +21,14 @@ export interface AuthState {
   perfil: Profile | null;
   /** true una vez que verificamos el estado de autenticación al abrir la app. */
   isInitialized: boolean;
+  /** Error de autenticación persistido tras un cierre de sesión forzado (p. ej. rol incorrecto). */
+  authError: string | null;
   /** Actualiza el usuario/sesión cuando el listener de Firebase Auth detecta un cambio. */
   setSession: (user: FirebaseUser | null) => void;
   /** Actualiza el perfil cargado desde la capa de datos. */
   setPerfil: (perfil: Profile | null) => void;
+  /** Define o limpia el error global de autenticación. */
+  setAuthError: (error: string | null) => void;
 }
 
 /**
@@ -37,6 +41,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   session: null,
   perfil: null,
   isInitialized: false,
+  authError: null,
   setSession: (user) =>
     set({
       user,
@@ -53,4 +58,5 @@ export const useAuthStore = create<AuthState>()((set) => ({
       isInitialized: true,
     }),
   setPerfil: (perfil) => set({ perfil }),
+  setAuthError: (authError) => set({ authError }),
 }));

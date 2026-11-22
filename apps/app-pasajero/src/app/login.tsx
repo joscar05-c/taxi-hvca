@@ -21,7 +21,7 @@ import {
 } from '@hvca/shared';
 
 export default function PantallaLogin() {
-  const { session } = useAuthStore();
+  const { session, authError, setAuthError } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -33,7 +33,7 @@ export default function PantallaLogin() {
     error: errorGoogle,
   } = useGoogleLogin('pasajero');
 
-  const errorVisible = error || errorGoogle;
+  const errorVisible = error || errorGoogle || authError;
 
   // Si ya hay sesión, el área autenticada lo redirige a la ruta principal.
   if (session) {
@@ -42,6 +42,7 @@ export default function PantallaLogin() {
 
   async function iniciarSesion() {
     setError(null);
+    setAuthError(null);
     if (!email.trim() || !password) {
       setError('Completa el correo y la contraseña.');
       return;
@@ -52,6 +53,7 @@ export default function PantallaLogin() {
       await authRepository.iniciarSesionConEmail(
         email.trim().toLowerCase(),
         password,
+        'pasajero',
       );
       // El listener de onAuthStateChanged actualiza el store y redirige.
     } catch (e) {
@@ -114,7 +116,10 @@ export default function PantallaLogin() {
 
           {/* Botón de Google */}
           <BotonGoogle
-            onPress={iniciarConGoogle}
+            onPress={() => {
+              setAuthError(null);
+              void iniciarConGoogle();
+            }}
             cargando={cargandoGoogle}
             label="Ingresar con Google"
           />

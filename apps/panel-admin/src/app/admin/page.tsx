@@ -119,7 +119,10 @@ export default function DashboardAdminPage() {
   async function cancelarViaje(id: string) {
     if (!confirm('¿Seguro que deseas cancelar este viaje como administrador?')) return;
     try {
-      await updateDoc(doc(db, 'solicitudes_viaje', id), { estado: 'cancelada' });
+      await updateDoc(doc(db, 'solicitudes_viaje', id), {
+        estado: 'cancelada',
+        cancelado_por: 'admin',
+      });
     } catch (e: any) {
       alert('Error al cancelar: ' + e.message);
     }

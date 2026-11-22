@@ -117,6 +117,7 @@ export default function ViajesPage() {
     try {
       await updateDoc(doc(db, 'solicitudes_viaje', id), {
         estado: nuevoEstado,
+        ...(nuevoEstado === 'cancelada' ? { cancelado_por: 'admin' } : {}),
       });
     } catch (err: any) {
       alert('Error al actualizar viaje: ' + err.message);
@@ -385,7 +386,14 @@ export default function ViajesPage() {
             <div className="mt-4 space-y-4 text-xs">
               <div className="flex items-center justify-between rounded-xl bg-gray-900/70 p-3.5 border border-gray-800">
                 <span className="text-gray-400">Estado Actual:</span>
-                <StatusBadge status={viajeDetalle.estado} />
+                <div className="flex items-center gap-2">
+                  {viajeDetalle.estado === 'cancelada' && viajeDetalle.cancelado_por ? (
+                    <span className="text-[11px] font-medium text-rose-300">
+                      Cancelado por {viajeDetalle.cancelado_por}
+                    </span>
+                  ) : null}
+                  <StatusBadge status={viajeDetalle.estado} />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

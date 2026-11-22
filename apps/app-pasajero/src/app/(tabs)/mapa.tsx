@@ -302,18 +302,16 @@ export default function PantallaMapa() {
 
   async function irAMiUbicacion() {
     setError(null);
-    if (!coords) {
-      const ok = await requestPermissionAndLocate();
-      if (!ok) {
-        centrarEnHuancavelica();
-      }
+    const actual = coords ?? (await requestPermissionAndLocate());
+    if (!actual) {
+      centrarEnHuancavelica();
       return;
     }
 
-    const fuera = estaFueraDeHuancavelica(coords);
+    const fuera = estaFueraDeHuancavelica(actual);
     const punto: Coordenadas = fuera
       ? HUANCAVELICA_CENTRO
-      : { latitude: coords.latitude, longitude: coords.longitude };
+      : { latitude: actual.latitude, longitude: actual.longitude };
     moverCamaraA(punto);
     setMensaje(
       fuera
@@ -324,19 +322,16 @@ export default function PantallaMapa() {
 
   async function usarMiGpsComoOrigen() {
     setError(null);
-    if (!coords) {
-      const ok = await requestPermissionAndLocate();
-      if (!ok) {
-        moverCamaraA(HUANCAVELICA_CENTRO);
-        return;
-      }
+    const actual = coords ?? (await requestPermissionAndLocate());
+    if (!actual) {
+      moverCamaraA(HUANCAVELICA_CENTRO);
       return;
     }
 
-    const fuera = estaFueraDeHuancavelica(coords);
+    const fuera = estaFueraDeHuancavelica(actual);
     const punto: Coordenadas = fuera
       ? HUANCAVELICA_CENTRO
-      : { latitude: coords.latitude, longitude: coords.longitude };
+      : { latitude: actual.latitude, longitude: actual.longitude };
     setOriginCoords(punto);
     setOrigenDireccion(formatearReferenciaHuancavelica(punto));
     setModoSeleccion('destino');
@@ -573,7 +568,9 @@ export default function PantallaMapa() {
     ) {
       setOperando(true);
       try {
-        await viajesRepository.cancelarSolicitud(solicitudActiva.id);
+        await viajesRepository.cancelarSolicitud(solicitudActiva.id, {
+          canceladoPor: 'pasajero',
+        });
       } catch (e) {
         setError(
           e instanceof Error ? e.message : 'No se pudo cancelar la solicitud.',
@@ -1103,10 +1100,15 @@ export default function PantallaMapa() {
           <Text style={styles.viajeTitulo}>
             {viajeAceptado.estado === 'completado'
               ? '¡Llegaste a tu destino!'
-              : 'Viaje en curso'}
+              : viajeAceptado.estado === 'cancelada'
+                ? 'Viaje cancelado'
+                : 'Viaje en curso'}
           </Text>
           <Text style={styles.viajeEstado}>
-            {textoEstadoViaje(viajeAceptado.estado)}
+            {viajeAceptado.estado === 'cancelada' &&
+            viajeAceptado.cancelado_por === 'conductor'
+              ? 'El conductor canceló el viaje. Puedes solicitar otro taxi.'
+              : textoEstadoViaje(viajeAceptado.estado)}
           </Text>
           {infoConductorViaje &&
           viajeAceptado.estado !== 'completado' &&

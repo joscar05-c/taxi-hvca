@@ -7,7 +7,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuthInit, useAuthStore } from '@hvca/shared';
 
 export default function RootLayout() {
-  useAuthInit();
+  useAuthInit('conductor');
   const { isInitialized } = useAuthStore();
 
   // Mientras no verificamos la sesión persistida, mostramos un splash.
@@ -30,6 +30,7 @@ export default function RootLayout() {
         <Stack.Screen name="login" />
         <Stack.Screen name="registro" />
         <Stack.Screen name="oauthredirect" />
+        <Stack.Screen name="verificacion-telefono" />
         <Stack.Screen name="(tabs)" />
       </Stack>
     </>

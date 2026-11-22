@@ -270,20 +270,41 @@ export default function UsuariosPage() {
                     </td>
 
                     <td className="py-4">
-                      {u.vehiculo ? (
+                      {u.rol === 'conductor' ? (
                         <div>
-                          <div className="flex items-center gap-1.5 text-gray-300 font-medium">
-                            <Car className="h-3.5 w-3.5 text-blue-400" />
-                            <span>{u.vehiculo}</span>
-                          </div>
-                          {u.rol === 'conductor' && u.dni_conductor ? (
-                            <p className="text-[10px] text-gray-400 mt-0.5">
-                              DNI: {u.dni_conductor} · Lic: {u.licencia_conductor || '—'} ·{' '}
-                              <span className="text-emerald-400 uppercase font-semibold">
-                                {u.estado_documentos || 'pendiente'}
+                          {u.vehiculo ? (
+                            <div className="flex items-center gap-1.5 text-gray-300 font-medium">
+                              <Car className="h-3.5 w-3.5 text-blue-400" />
+                              <span>{u.vehiculo}</span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic">Sin vehículo</span>
+                          )}
+                          <p className="text-[10px] text-gray-400 mt-0.5 flex flex-wrap items-center gap-1">
+                            {u.dni_conductor ? (
+                              <span>
+                                DNI: {u.dni_conductor} · Lic: {u.licencia_conductor || '—'} ·
                               </span>
-                            </p>
-                          ) : null}
+                            ) : null}
+                            <span
+                              className={`uppercase font-semibold px-1.5 py-0.5 rounded ${
+                                u.estado_documentos === 'aprobado'
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : u.estado_documentos === 'en_revision'
+                                    ? 'bg-blue-500/15 text-blue-300'
+                                    : u.estado_documentos === 'rechazado'
+                                      ? 'bg-rose-500/15 text-rose-400'
+                                      : 'bg-amber-500/15 text-amber-300'
+                              }`}
+                            >
+                              KYC: {u.estado_documentos || 'pendiente'}
+                            </span>
+                          </p>
+                        </div>
+                      ) : u.vehiculo ? (
+                        <div className="flex items-center gap-1.5 text-gray-300 font-medium">
+                          <Car className="h-3.5 w-3.5 text-blue-400" />
+                          <span>{u.vehiculo}</span>
                         </div>
                       ) : (
                         <span className="text-gray-400 italic">N/A</span>
