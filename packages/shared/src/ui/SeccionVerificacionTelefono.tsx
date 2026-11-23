@@ -1,14 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Modal,
   Platform,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
-import * as Linking from 'expo-linking';
-import * as WebBrowser from 'expo-web-browser';
+import { WebView } from '@expo/dom-webview';
 import { RecaptchaVerifier } from 'firebase/auth';
 
 import type { Profile } from '../domain/types';
@@ -21,7 +24,124 @@ import { useAuthStore } from '../store/useAuthStore';
 import { Button } from './Button';
 
 const RECAPTCHA_WEB_CONTAINER_ID = 'recaptcha-phone-web';
-const DEFAULT_PHONE_AUTH_URL = 'https://taxi-hvca.vercel.app/verificar-telefono';
+const DEFAULT_FIREBASE_AUTH_DOMAIN = 'taxi-hvca-app.firebaseapp.com';
+
+const SCRIPT_POLYFILL_STORAGE = `
+(function() {
+  function createMemoryStorage() {
+    var store = {};
+    return {
+      getItem: function(k) { return Object.prototype.hasOwnProperty.call(store, String(k)) ? store[String(k)] : null; },
+      setItem: function(k, v) { store[String(k)] = String(v); },
+      removeItem: function(k) { delete store[String(k)]; },
+      clear: function() { store = {}; },
+      key: function(i) { var keys = Object.keys(store); return i < keys.length ? keys[i] : null; },
+      get length() { return Object.keys(store).length; }
+    };
+  }
+  function ensureStorage(name) {
+    try {
+      var s = window[name];
+      if (!s) throw new Error('missing');
+      var k = '__taxi_hvca_test__';
+      s.setItem(k, '1');
+      s.removeItem(k);
+    } catch (e) {
+      try {
+        Object.defineProperty(window, name, {
+          value: createMemoryStorage(),
+          configurable: true,
+          writable: true
+        });
+      } catch (err) {}
+    }
+  }
+  ensureStorage('localStorage');
+  ensureStorage('sessionStorage');
+})();
+`;
+
+function construirScriptRecaptcha(siteKey: string): string {
+  const siteKeyJson = JSON.stringify(siteKey);
+  return `
+(function() {
+  if (window.__taxiHvcaRecaptchaBooted) return;
+  window.__taxiHvcaRecaptchaBooted = true;
+
+  function post(payload) {
+    try {
+      if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+        window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+      }
+    } catch (e) {}
+  }
+
+  try {
+    document.documentElement.innerHTML = [
+      '<head>',
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">',
+      '<style>',
+      'html, body { margin: 0; padding: 0; background: #ffffff; color: #111827; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height: 100%; overflow-y: auto; }',
+      '.wrap { min-height: 100vh; box-sizing: border-box; padding: 24px 8px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 14px; }',
+      '.info { font-size: 14px; color: #4B5563; text-align: center; line-height: 20px; max-width: 320px; padding: 0 8px; }',
+      '#recaptcha-container { display: flex; justify-content: center; align-items: center; min-height: 82px; width: 100%; }',
+      '.estado { font-size: 13px; color: #2563EB; font-weight: 600; text-align: center; padding: 0 12px; }',
+      '</style>',
+      '</head>',
+      '<body>',
+      '<div class="wrap">',
+      '  <div class="info">Marca la casilla "No soy un robot" para enviarte el código SMS de 6 dígitos.</div>',
+      '  <div id="recaptcha-container"></div>',
+      '  <div id="recaptcha-estado" class="estado">Cargando verificación de seguridad...</div>',
+      '</div>',
+      '</body>'
+    ].join('');
+
+    window.__onTaxiRecaptchaLoad = function() {
+      var estadoEl = document.getElementById('recaptcha-estado');
+      if (estadoEl) estadoEl.textContent = '';
+      try {
+        window.grecaptcha.render('recaptcha-container', {
+          sitekey: ${siteKeyJson},
+          size: 'normal',
+          theme: 'light',
+          callback: function(token) {
+            if (estadoEl) estadoEl.textContent = 'Verificación completada. Enviando SMS...';
+            post({ type: 'verify', token: token });
+          },
+          'expired-callback': function() {
+            if (estadoEl) estadoEl.textContent = 'La verificación expiró. Marca la casilla nuevamente.';
+          },
+          'error-callback': function() {
+            post({ type: 'error', message: 'Error de conexión con Google reCAPTCHA. Intenta nuevamente.' });
+          }
+        });
+      } catch (renderErr) {
+        post({
+          type: 'error',
+          message: (renderErr && renderErr.message) ? renderErr.message : 'No se pudo inicializar reCAPTCHA.'
+        });
+      }
+    };
+
+    var script = document.createElement('script');
+    script.src = 'https://www.google.com/recaptcha/api.js?onload=__onTaxiRecaptchaLoad&render=explicit&hl=es';
+    script.async = true;
+    script.defer = true;
+    script.onerror = function() {
+      post({ type: 'error', message: 'No se pudo cargar Google reCAPTCHA. Revisa tu conexión a internet.' });
+    };
+    document.head.appendChild(script);
+  } catch (err) {
+    post({
+      type: 'error',
+      message: (err && err.message) ? err.message : 'Error inesperado al preparar la verificación.'
+    });
+  }
+})();
+`;
+}
 
 export interface SeccionVerificacionTelefonoProps {
   perfil: Profile | null;
@@ -49,7 +169,24 @@ export function SeccionVerificacionTelefono({
   const [exito, setExito] = useState<string | null>(null);
   const [segundosRestantes, setSegundosRestantes] = useState(0);
 
+  const [mostrarModalRecaptcha, setMostrarModalRecaptcha] = useState(false);
+  const [recaptchaSiteKey, setRecaptchaSiteKey] = useState<string | null>(null);
+  const [telefonoParaVerificar, setTelefonoParaVerificar] = useState<string | null>(null);
+  const [recaptchaReloadKey, setRecaptchaReloadKey] = useState(0);
+
   const recaptchaWebRef = useRef<RecaptchaVerifier | null>(null);
+
+  const authDomain = useMemo(() => {
+    return (
+      auth.app.options.authDomain?.trim() ||
+      process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN?.trim() ||
+      DEFAULT_FIREBASE_AUTH_DOMAIN
+    );
+  }, []);
+
+  const recaptchaScript = useMemo(() => {
+    return recaptchaSiteKey ? construirScriptRecaptcha(recaptchaSiteKey) : '';
+  }, [recaptchaSiteKey]);
 
   // Temporizador para reenvío de código
   useEffect(() => {
@@ -91,6 +228,75 @@ export function SeccionVerificacionTelefono({
     }
   }, [perfil?.telefono]);
 
+  async function enviarSmsTrasRecaptcha(telefonoE164: string, recaptchaToken: string) {
+    setCargando(true);
+    setError(null);
+    setExito(null);
+    try {
+      const res = await authRepository.enviarCodigoSmsConTokenRecaptcha(
+        telefonoE164,
+        recaptchaToken,
+      );
+      setVerificationId(res.verificationId);
+      setTelefonoPendiente(res.telefonoE164);
+      setPaso('ingreso_codigo');
+      setSegundosRestantes(60);
+      setExito(`Código de 6 dígitos enviado por SMS a ${res.telefonoE164}`);
+      Alert.alert(
+        'Código SMS Enviado',
+        `Se ha enviado un código de verificación de 6 dígitos a tu celular: ${res.telefonoE164}.`,
+      );
+    } catch (e: unknown) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : 'No se pudo enviar el código de verificación.',
+      );
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  function handleCerrarModalRecaptcha() {
+    setMostrarModalRecaptcha(false);
+    setError('Verificación cancelada antes de enviar el código SMS.');
+  }
+
+  function handleWebViewMessage(event: { nativeEvent: { data: string } }) {
+    let payload: { type?: unknown; token?: unknown; message?: unknown } | null = null;
+    try {
+      payload = JSON.parse(event.nativeEvent.data) as {
+        type?: unknown;
+        token?: unknown;
+        message?: unknown;
+      };
+    } catch {
+      return;
+    }
+
+    if (!payload) return;
+
+    if (payload.type === 'verify' && typeof payload.token === 'string' && payload.token.trim()) {
+      const telefonoDestino = telefonoParaVerificar;
+      setMostrarModalRecaptcha(false);
+      setTelefonoParaVerificar(null);
+      if (telefonoDestino) {
+        void enviarSmsTrasRecaptcha(telefonoDestino, payload.token);
+      }
+      return;
+    }
+
+    if (payload.type === 'error') {
+      setMostrarModalRecaptcha(false);
+      setTelefonoParaVerificar(null);
+      setError(
+        typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message
+          : 'No se pudo completar la verificación reCAPTCHA.',
+      );
+    }
+  }
+
   async function handleSolicitarCodigo() {
     setError(null);
     setExito(null);
@@ -125,7 +331,6 @@ export function SeccionVerificacionTelefono({
         }
       }
 
-      let idVerificacion = '';
       if (Platform.OS === 'web') {
         if (recaptchaWebRef.current) {
           try {
@@ -140,51 +345,22 @@ export function SeccionVerificacionTelefono({
         });
         recaptchaWebRef.current = verifier;
         const res = await authRepository.enviarCodigoSmsWeb(telefonoE164, verifier);
-        idVerificacion = res.verificationId;
+        setVerificationId(res.verificationId);
+        setTelefonoPendiente(telefonoE164);
+        setPaso('ingreso_codigo');
+        setSegundosRestantes(60);
+        setExito(`Código de 6 dígitos enviado por SMS a ${telefonoE164}`);
+        Alert.alert(
+          'Código SMS Enviado',
+          `Se ha enviado un código de verificación de 6 dígitos a tu celular: ${telefonoE164}.`,
+        );
       } else {
-        const baseUrl = (
-          process.env.EXPO_PUBLIC_PHONE_AUTH_URL || DEFAULT_PHONE_AUTH_URL
-        ).trim();
-        const redirectUrl = Linking.createURL('verificacion-telefono');
-        const authUrl = `${baseUrl}?phone=${encodeURIComponent(
-          telefonoE164,
-        )}&redirect=${encodeURIComponent(redirectUrl)}`;
-
-        const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-        if (result.type !== 'success') {
-          if (result.type === 'cancel' || result.type === 'dismiss') {
-            setError('Verificación cancelada antes de enviar el código SMS.');
-          }
-          return;
-        }
-
-        const parsed = Linking.parse(result.url);
-        const queryError = parsed.queryParams?.error;
-        if (typeof queryError === 'string' && queryError.length > 0) {
-          setError(
-            queryError === 'cancelled'
-              ? 'Verificación cancelada.'
-              : `No se pudo iniciar la verificación (${queryError}).`,
-          );
-          return;
-        }
-
-        const vid = parsed.queryParams?.verificationId;
-        if (typeof vid !== 'string' || !vid.trim()) {
-          throw new Error('No se recibió el identificador de verificación SMS.');
-        }
-        idVerificacion = vid.trim();
+        const siteKey = await authRepository.obtenerRecaptchaSiteKey();
+        setRecaptchaSiteKey(siteKey);
+        setTelefonoParaVerificar(telefonoE164);
+        setRecaptchaReloadKey((prev) => prev + 1);
+        setMostrarModalRecaptcha(true);
       }
-
-      setVerificationId(idVerificacion);
-      setTelefonoPendiente(telefonoE164);
-      setPaso('ingreso_codigo');
-      setSegundosRestantes(60);
-      setExito(`Código de 6 dígitos enviado por SMS a ${telefonoE164}`);
-      Alert.alert(
-        'Código SMS Enviado',
-        `Se ha enviado un código de verificación de 6 dígitos a tu celular: ${telefonoE164}.`,
-      );
     } catch (e: unknown) {
       setError(
         e instanceof Error
@@ -376,6 +552,62 @@ export function SeccionVerificacionTelefono({
           )}
         </View>
       )}
+
+      {Platform.OS !== 'web' && (
+        <Modal
+          visible={mostrarModalRecaptcha}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={handleCerrarModalRecaptcha}
+        >
+          <View style={styles.modalContenedor}>
+            <View style={styles.modalCabecera}>
+              <Text style={styles.modalTitulo}>Verificación de seguridad</Text>
+              <View style={styles.modalAcciones}>
+                <TouchableOpacity
+                  onPress={() => setRecaptchaReloadKey((prev) => prev + 1)}
+                  style={styles.modalBotonSecundario}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.modalTextoSecundario}>Recargar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleCerrarModalRecaptcha}
+                  style={styles.modalBotonCerrar}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.modalTextoCerrar}>Cancelar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.modalWebViewContenedor}>
+              {mostrarModalRecaptcha && recaptchaSiteKey && recaptchaScript ? (
+                <WebView
+                  key={`recaptcha-${recaptchaReloadKey}`}
+                  source={{ uri: `https://${authDomain}/__/auth/iframe` }}
+                  injectedJavaScriptBeforeContentLoaded={SCRIPT_POLYFILL_STORAGE}
+                  injectedJavaScript={recaptchaScript}
+                  onMessage={handleWebViewMessage}
+                  onRenderProcessGone={() => {
+                    setError('El visor de verificación se reinició. Intenta nuevamente.');
+                    setMostrarModalRecaptcha(false);
+                  }}
+                  style={styles.modalWebView}
+                  containerStyle={styles.modalWebView}
+                />
+              ) : (
+                <View style={styles.modalCargando}>
+                  <ActivityIndicator size="large" color="#2563EB" />
+                  <Text style={styles.modalCargandoTexto}>
+                    Preparando verificación...
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -538,5 +770,75 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 8,
     minHeight: 38,
+  },
+  modalContenedor: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingTop:
+      Platform.OS === 'android' ? Math.max(StatusBar.currentHeight ?? 16, 16) : 52,
+  },
+  modalCabecera: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+  },
+  modalTitulo: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    flexShrink: 1,
+  },
+  modalAcciones: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalBotonSecundario: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  modalTextoSecundario: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1D4ED8',
+  },
+  modalBotonCerrar: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+  },
+  modalTextoCerrar: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#B91C1C',
+  },
+  modalWebViewContenedor: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  modalWebView: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  modalCargando: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  modalCargandoTexto: {
+    fontSize: 14,
+    color: '#4B5563',
+    fontWeight: '500',
   },
 });

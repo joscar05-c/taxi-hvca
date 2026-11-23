@@ -21,6 +21,7 @@ import type { Profile, RiderStatus } from '../domain/types';
 import { auth, db } from './firebaseClient';
 
 const COLECCION_PERFILES = 'perfiles';
+let cachedRecaptchaSiteKey: string | null = null;
 
 /**
  * Valida un número celular peruano (9 dígitos iniciando en 9, con o sin prefijo +51)
@@ -248,6 +249,69 @@ export const authRepository = {
     } catch (error) {
       throw new Error(traducirErrorPhoneAuth(error));
     }
+  },
+
+  /**
+   * Obtiene el siteKey oficial de reCAPTCHA para Firebase Phone Auth
+   * desde Google Identity Toolkit y lo guarda en caché en memoria.
+   */
+  async obtenerRecaptchaSiteKey(): Promise<string> {
+    if (cachedRecaptchaSiteKey) {
+      return cachedRecaptchaSiteKey;
+    }
+
+    const apiKey =
+      auth.app.options.apiKey ?? process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '';
+    if (!apiKey.trim()) {
+      throw new Error(
+        'Falta la clave de API de Firebase para iniciar la verificación reCAPTCHA.',
+      );
+    }
+
+    const respuesta = await fetch(
+      `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getRecaptchaParam?key=${encodeURIComponent(
+        apiKey.trim(),
+      )}`,
+    );
+    if (!respuesta.ok) {
+      throw new Error(
+        'No se pudieron obtener los parámetros de seguridad reCAPTCHA.',
+      );
+    }
+
+    const datos = (await respuesta.json()) as { recaptchaSiteKey?: unknown };
+    if (
+      typeof datos.recaptchaSiteKey !== 'string' ||
+      !datos.recaptchaSiteKey.trim()
+    ) {
+      throw new Error(
+        'Firebase no devolvió un siteKey reCAPTCHA válido para este proyecto.',
+      );
+    }
+
+    cachedRecaptchaSiteKey = datos.recaptchaSiteKey.trim();
+    return cachedRecaptchaSiteKey;
+  },
+
+  /**
+   * Envía un SMS real de verificación usando un token reCAPTCHA obtenido
+   * dentro de la app (por ejemplo mediante WebView modal in-app).
+   */
+  async enviarCodigoSmsConTokenRecaptcha(
+    numeroTelefono: string,
+    recaptchaToken: string,
+  ): Promise<{ verificationId: string; telefonoE164: string }> {
+    const tokenLimpio = recaptchaToken.trim();
+    if (!tokenLimpio) {
+      throw new Error('El token de verificación reCAPTCHA está vacío.');
+    }
+
+    const appVerifier: ApplicationVerifier = {
+      type: 'recaptcha',
+      verify: async () => tokenLimpio,
+    };
+
+    return this.enviarCodigoSmsWeb(numeroTelefono, appVerifier);
   },
 
   /**
