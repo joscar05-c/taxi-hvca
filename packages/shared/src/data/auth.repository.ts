@@ -19,9 +19,9 @@ import {
 
 import type { Profile, RiderStatus } from '../domain/types';
 import { auth, db } from './firebaseClient';
+import { iniciarVerificacionTelefonoNativa } from './phoneAuth';
 
 const COLECCION_PERFILES = 'perfiles';
-let cachedRecaptchaSiteKey: string | null = null;
 
 /**
  * Valida un número celular peruano (9 dígitos iniciando en 9, con o sin prefijo +51)
@@ -56,6 +56,17 @@ function traducirErrorPhoneAuth(error: unknown): string {
       return 'Por seguridad, cierra sesión y vuelve a iniciar sesión antes de cambiar tu número.';
     case 'auth/too-many-requests':
       return 'Demasiados intentos realizados. Espera unos minutos antes de volver a intentarlo.';
+    case 'auth/invalid-phone-number':
+      return 'El número de celular ingresado no es válido.';
+    case 'auth/missing-client-identifier':
+    case 'auth/app-not-authorized':
+      return 'La app Android no está autorizada para Phone Auth. Verifica las huellas SHA-1/SHA-256 en Firebase Console.';
+    case 'auth/quota-exceeded':
+      return 'Se agotó la cuota diaria de envío de SMS en Firebase. Inténtalo más tarde.';
+    case 'auth/captcha-check-failed':
+      return 'No se pudo completar la verificación de seguridad de Google Play Services.';
+    case 'auth/network-request-failed':
+      return 'Sin conexión a internet para enviar o validar el código SMS.';
     default:
       return error instanceof Error
         ? error.message
@@ -252,66 +263,34 @@ export const authRepository = {
   },
 
   /**
-   * Obtiene el siteKey oficial de reCAPTCHA para Firebase Phone Auth
-   * desde Google Identity Toolkit y lo guarda en caché en memoria.
+   * Envía un SMS de verificación mediante el SDK nativo de Firebase Auth
+   * (Google Play Services / Play Integrity en Android; APNs en iOS).
    */
-  async obtenerRecaptchaSiteKey(): Promise<string> {
-    if (cachedRecaptchaSiteKey) {
-      return cachedRecaptchaSiteKey;
-    }
-
-    const apiKey =
-      auth.app.options.apiKey ?? process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '';
-    if (!apiKey.trim()) {
-      throw new Error(
-        'Falta la clave de API de Firebase para iniciar la verificación reCAPTCHA.',
-      );
-    }
-
-    const respuesta = await fetch(
-      `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getRecaptchaParam?key=${encodeURIComponent(
-        apiKey.trim(),
-      )}`,
-    );
-    if (!respuesta.ok) {
-      throw new Error(
-        'No se pudieron obtener los parámetros de seguridad reCAPTCHA.',
-      );
-    }
-
-    const datos = (await respuesta.json()) as { recaptchaSiteKey?: unknown };
-    if (
-      typeof datos.recaptchaSiteKey !== 'string' ||
-      !datos.recaptchaSiteKey.trim()
-    ) {
-      throw new Error(
-        'Firebase no devolvió un siteKey reCAPTCHA válido para este proyecto.',
-      );
-    }
-
-    cachedRecaptchaSiteKey = datos.recaptchaSiteKey.trim();
-    return cachedRecaptchaSiteKey;
-  },
-
-  /**
-   * Envía un SMS real de verificación usando un token reCAPTCHA obtenido
-   * dentro de la app (por ejemplo mediante WebView modal in-app).
-   */
-  async enviarCodigoSmsConTokenRecaptcha(
+  async enviarCodigoSmsNativo(
     numeroTelefono: string,
-    recaptchaToken: string,
-  ): Promise<{ verificationId: string; telefonoE164: string }> {
-    const tokenLimpio = recaptchaToken.trim();
-    if (!tokenLimpio) {
-      throw new Error('El token de verificación reCAPTCHA está vacío.');
+    forzarReenvio = false,
+  ): Promise<{
+    verificationId: string;
+    telefonoE164: string;
+    codigoAutoVerificado: string | null;
+  }> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Debes iniciar sesión para verificar tu teléfono.');
+
+    const telefonoE164 = normalizarTelefonoPeruE164(numeroTelefono);
+    try {
+      const resultado = await iniciarVerificacionTelefonoNativa(
+        telefonoE164,
+        forzarReenvio,
+      );
+      return {
+        verificationId: resultado.verificationId,
+        telefonoE164,
+        codigoAutoVerificado: resultado.codigoAutoVerificado,
+      };
+    } catch (error) {
+      throw new Error(traducirErrorPhoneAuth(error));
     }
-
-    const appVerifier: ApplicationVerifier = {
-      type: 'recaptcha',
-      verify: async () => tokenLimpio,
-    };
-
-    return this.enviarCodigoSmsWeb(numeroTelefono, appVerifier);
   },
 
   /**
