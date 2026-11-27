@@ -50,6 +50,8 @@ export { RutaVisual } from './ui/RutaVisual';
 export type { RutaVisualProps } from './ui/RutaVisual';
 export { SeccionVerificacionTelefono } from './ui/SeccionVerificacionTelefono';
 export type { SeccionVerificacionTelefonoProps } from './ui/SeccionVerificacionTelefono';
+export { TarjetaCambioApp } from './ui/TarjetaCambioApp';
+export type { TarjetaCambioAppProps } from './ui/TarjetaCambioApp';
 export { PantallaCentrada, Etiqueta, colores, radios, sombras } from './ui/theme';
 
 // Hooks compartidos

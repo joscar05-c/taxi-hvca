@@ -13,6 +13,7 @@ import {
   Button,
   Input,
   SeccionVerificacionTelefono,
+  TarjetaCambioApp,
   authRepository,
   colores,
   radios,
@@ -324,6 +325,12 @@ export default function PantallaPerfilConductor() {
 
           {/* Validación Telefónica Obligatoria */}
           <SeccionVerificacionTelefono perfil={perfil} />
+
+          {/* Acceso directo a la app de Pasajero */}
+          <TarjetaCambioApp
+            destino="pasajero"
+            urlTienda={process.env.EXPO_PUBLIC_PASAJERO_STORE_URL}
+          />
 
           {/* Cerrar Sesión */}
           <Button

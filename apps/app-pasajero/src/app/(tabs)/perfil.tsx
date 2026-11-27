@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Button,
   SeccionVerificacionTelefono,
+  TarjetaCambioApp,
   authRepository,
   colores,
   radios,
@@ -129,6 +130,12 @@ export default function PantallaPerfilPasajero() {
 
           {/* Sección de Validación Telefónica contra números falsos */}
           <SeccionVerificacionTelefono perfil={perfil} />
+
+          {/* Acceso directo a la app de Conductor */}
+          <TarjetaCambioApp
+            destino="conductor"
+            urlTienda={process.env.EXPO_PUBLIC_CONDUCTOR_STORE_URL}
+          />
 
           {/* Botón de Cierre de Sesión */}
           <Button
