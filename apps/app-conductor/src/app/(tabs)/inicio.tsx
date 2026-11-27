@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
-
 import * as Location from 'expo-location';
+import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
-  Input,
+  HUANCAVELICA_CENTRO,
+  Icono,
+  PUNTOS_SIMULACION_HVCA,
+  RutaVisual,
   authRepository,
   avanzarHaciaDestino,
   calcularDistanciaHaversine,
@@ -23,9 +30,9 @@ import {
   estaFueraDeHuancavelica,
   extraerCoordenadasPerfil,
   formatearReferenciaHuancavelica,
-  HUANCAVELICA_CENTRO,
   obtenerDireccionLegible,
-  PUNTOS_SIMULACION_HVCA,
+  radios,
+  sombras,
   useAuth,
   useBackgroundLocation,
   useForegroundLocation,
@@ -40,22 +47,41 @@ import {
   BACKGROUND_LOCATION_TASK,
   setModoSimulacionUbicacion,
 } from '../../locationTask';
-import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const DISTANCIA_MAX_KM = 3;
+
+const PASOS_CONDUCTOR = [
+  { id: 'aceptado', label: 'Ir al origen' },
+  { id: 'en_camino_origen', label: 'En origen' },
+  { id: 'en_curso', label: 'En viaje' },
+] as const;
 
 type SolicitudCercana = {
   solicitud: SolicitudViaje;
   distanciaKm: number;
 };
 
+function indicePasoConductor(estado: SolicitudViaje['estado']): number {
+  switch (estado) {
+    case 'aceptado':
+      return 0;
+    case 'en_camino_origen':
+      return 1;
+    case 'en_curso':
+      return 2;
+    case 'completado':
+      return 3;
+    default:
+      return -1;
+  }
+}
+
 function etiquetaEstadoViaje(estado: SolicitudViaje['estado']): string {
   switch (estado) {
     case 'aceptado':
-      return 'En camino al pasajero';
+      return 'Dirígete al punto de recojo del pasajero';
     case 'en_camino_origen':
-      return 'Esperando al pasajero en el origen';
+      return 'Esperando al pasajero en el punto de recojo';
     case 'en_curso':
       return 'Viaje en curso hacia el destino';
     case 'completado':
@@ -76,10 +102,28 @@ function normalizarTelefonoWhatsApp(telefono: string): string | null {
   return digitos;
 }
 
+function obtenerIniciales(nombre: string): string {
+  const partes = nombre.trim().split(/\s+/).filter(Boolean);
+  if (partes.length >= 2) {
+    return `${partes[0][0]}${partes[1][0]}`.toUpperCase();
+  }
+  return (partes[0] ?? 'P').slice(0, 2).toUpperCase();
+}
+
+function esMismoDiaLocal(fechaIso: string, referencia: Date): boolean {
+  const d = new Date(fechaIso);
+  if (Number.isNaN(d.getTime())) return false;
+  return (
+    d.getFullYear() === referencia.getFullYear() &&
+    d.getMonth() === referencia.getMonth() &&
+    d.getDate() === referencia.getDate()
+  );
+}
+
 export default function PantallaInicio() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { perfil, sesion, cerrarSesion } = useAuth();
+  const { perfil, sesion } = useAuth();
   const { isTracking, loading, error: errorTracking, startTracking, stopTracking } =
     useBackgroundLocation(BACKGROUND_LOCATION_TASK);
   const { coords, watching, requestPermissionAndLocate } = useForegroundLocation({
@@ -102,6 +146,7 @@ export default function PantallaInicio() {
   const [direccionConductor, setDireccionConductor] = useState<string | null>(null);
   const [cargandoDireccion, setCargandoDireccion] = useState(false);
   const [seguirEnMapa, setSeguirEnMapa] = useState(true);
+  const [mostrarSimulador, setMostrarSimulador] = useState(false);
 
   const [operando, setOperando] = useState(false);
   const [mensaje, setMensaje] = useState<string | null>(null);
@@ -117,16 +162,13 @@ export default function PantallaInicio() {
   const [viajeParaCalificar, setViajeParaCalificar] =
     useState<SolicitudViaje | null>(null);
   const [estrellasPasajero, setEstrellasPasajero] = useState<number>(5);
+  const [gananciasHoy, setGananciasHoy] = useState<number>(0);
 
   const [contraofertaId, setContraofertaId] = useState<string | null>(null);
   const [precioContraoferta, setPrecioContraoferta] = useState('');
-  const [vehiculo, setVehiculo] = useState('');
 
   const idConductor = sesion?.user?.id;
-
-  useEffect(() => {
-    if (perfil?.vehiculo) setVehiculo(perfil.vehiculo);
-  }, [perfil?.vehiculo]);
+  const primerNombre = (perfil?.nombre?.trim().split(/\s+/)[0] || '').trim();
 
   // Recuperar automáticamente el viaje activo y ofertas pendientes al abrir la app
   useEffect(() => {
@@ -157,6 +199,28 @@ export default function PantallaInicio() {
     return () => {
       activo = false;
     };
+  }, [idConductor]);
+
+  // Calcular ganancias del día en tiempo real desde el historial del conductor
+  useEffect(() => {
+    if (!idConductor) return;
+    return viajesRepository.suscribirHistorialViajes(
+      idConductor,
+      'conductor',
+      (lista) => {
+        const hoy = new Date();
+        const total = lista
+          .filter(
+            (v) => v.estado === 'completado' && esMismoDiaLocal(v.created_at, hoy),
+          )
+          .reduce(
+            (acc, v) => acc + Number(v.precio_final ?? v.precio_inicial ?? 0),
+            0,
+          );
+        setGananciasHoy(total);
+      },
+      () => undefined,
+    );
   }, [idConductor]);
 
   // Suscripción en tiempo real al perfil del pasajero del viaje activo
@@ -252,7 +316,7 @@ export default function PantallaInicio() {
     };
   }, [ubicacionConductor]);
 
-  // En primer plano sincronizamos con Firestore (con throttling) la ubicación activa mientras está conectado o en viaje
+  // Sincronización en primer plano hacia Firestore con throttling mientras está conectado o en viaje
   useEffect(() => {
     if (!idConductor || !ubicacionConductor || (!isTracking && !viajeActivo)) {
       return;
@@ -384,7 +448,7 @@ export default function PantallaInicio() {
       puntos.push(ubicacionConductor);
     }
     mapRef.current.fitToCoordinates(puntos, {
-      edgePadding: { top: 50, right: 40, bottom: 50, left: 40 },
+      edgePadding: { top: 80, right: 44, bottom: 56, left: 44 },
       animated: true,
     });
   }
@@ -425,6 +489,7 @@ export default function PantallaInicio() {
         filtradas.push({ solicitud, distanciaKm });
       }
     });
+    filtradas.sort((a, b) => a.distanciaKm - b.distanciaKm);
     setSolicitudesCercanas(filtradas);
   }, []);
 
@@ -448,7 +513,9 @@ export default function PantallaInicio() {
 
     setSolicitudesCercanas((prev) => {
       const sinEsta = prev.filter((s) => s.solicitud.id !== solicitud.id);
-      return [...sinEsta, { solicitud, distanciaKm }];
+      return [...sinEsta, { solicitud, distanciaKm }].sort(
+        (a, b) => a.distanciaKm - b.distanciaKm,
+      );
     });
   }, []);
 
@@ -467,7 +534,7 @@ export default function PantallaInicio() {
     );
   }, [isTracking, manejarNuevaSolicitud, manejarSolicitudEliminada]);
 
-  // Por cada solicitud con oferta enviada (que aún no sea el viajeActivo), escuchamos si el pasajero la acepta o cambia de estado.
+  // Por cada solicitud con oferta enviada (que aún no sea viajeActivo), escuchamos cambios
   useEffect(() => {
     const limpiadores: Array<() => void> = [];
     ofertasEnviadas.forEach((solicitudId) => {
@@ -602,7 +669,7 @@ export default function PantallaInicio() {
 
         try {
           await authRepository.actualizarConexion(true);
-          setMensaje('Estás conectado. Compartimos tu ubicación en segundo plano.');
+          setMensaje('Estás en línea y listo para recibir solicitudes.');
         } catch (e) {
           await stopTracking();
           setError(
@@ -662,18 +729,19 @@ export default function PantallaInicio() {
 
   function abrirContraoferta(solicitud: SolicitudViaje) {
     setContraofertaId(solicitud.id);
-    setPrecioContraoferta(String(solicitud.precio_inicial));
+    setPrecioContraoferta((Number(solicitud.precio_inicial) + 1).toFixed(2));
     setError(null);
   }
 
-  async function confirmarContraoferta(solicitud: SolicitudViaje) {
-    if (!sesion?.user || contraofertaId !== solicitud.id) return;
+  async function confirmarContraoferta(solicitud: SolicitudViaje, montoExplicito?: number) {
+    if (!sesion?.user) return;
 
     if (!validarRequisitosOperativos()) {
       return;
     }
 
-    const precio = parseFloat(precioContraoferta.trim().replace(',', '.'));
+    const precio =
+      montoExplicito ?? parseFloat(precioContraoferta.trim().replace(',', '.'));
     if (!Number.isFinite(precio) || precio <= 0) {
       setError('Ingresa un precio válido.');
       return;
@@ -695,7 +763,7 @@ export default function PantallaInicio() {
       );
       marcarOfertada(solicitud.id);
       setContraofertaId(null);
-      setMensaje('Contraoferta enviada.');
+      setMensaje(`Contraoferta de S/ ${precio.toFixed(2)} enviada.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo enviar la contraoferta.');
     } finally {
@@ -714,7 +782,7 @@ export default function PantallaInicio() {
         'en_camino_origen',
       );
       setViajeActivo(actualizada);
-      setMensaje('Avisaste al pasajero que llegaste al origen.');
+      setMensaje('Avisaste al pasajero que llegaste al punto de recojo.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo actualizar el viaje.');
     } finally {
@@ -733,7 +801,7 @@ export default function PantallaInicio() {
         'en_curso',
       );
       setViajeActivo(actualizada);
-      setMensaje('Viaje iniciado. En curso hacia el destino.');
+      setMensaje('Viaje iniciado. En camino hacia el destino.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo iniciar el viaje.');
     } finally {
@@ -835,20 +903,6 @@ export default function PantallaInicio() {
     }
   }
 
-  async function guardarVehiculo() {
-    setError(null);
-    setMensaje(null);
-    setOperando(true);
-    try {
-      await authRepository.actualizarVehiculo(vehiculo.trim());
-      setMensaje('Vehículo guardado.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el vehículo.');
-    } finally {
-      setOperando(false);
-    }
-  }
-
   async function llamarPasajero() {
     const tel = perfilPasajero?.telefono?.trim();
     if (!tel) {
@@ -885,47 +939,59 @@ export default function PantallaInicio() {
     await Linking.openURL(url);
   }
 
+  const textoDireccionActual = ubicacionConductor
+    ? cargandoDireccion && !direccionConductor
+      ? 'Obteniendo dirección exacta...'
+      : direccionConductor ?? formatearReferenciaHuancavelica(ubicacionConductor)
+    : 'Esperando señal GPS...';
+
+  const distanciaObjetivoViaje = useMemo(() => {
+    if (!viajeActivo || !ubicacionConductor) return null;
+    const haciaDestino = viajeActivo.estado === 'en_curso';
+    const lat = haciaDestino ? viajeActivo.destino_lat : viajeActivo.origen_lat;
+    const lng = haciaDestino ? viajeActivo.destino_lng : viajeActivo.origen_lng;
+    const km = calcularDistanciaHaversine(
+      ubicacionConductor.latitude,
+      ubicacionConductor.longitude,
+      lat,
+      lng,
+    );
+    return {
+      km,
+      minutos: Math.max(1, Math.round((km / 22) * 60)),
+      haciaDestino,
+    };
+  }, [viajeActivo, ubicacionConductor]);
+
+  const pasoActualConductor = viajeActivo
+    ? indicePasoConductor(viajeActivo.estado)
+    : -1;
+
+  const requiereTelefono = !perfil?.telefono_verificado;
+  const requiereDocs =
+    perfil?.estado_documentos !== 'aprobado' || !perfil?.vehiculo?.trim();
+
   return (
-    <ScrollView
-      style={styles.contenedor}
-      contentContainerStyle={[
-        styles.contenido,
-        { paddingTop: Math.max(insets.top, 24) },
-      ]}
-      keyboardShouldPersistTaps="handled"
+    <KeyboardAvoidingView
+      style={styles.pantalla}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <View style={styles.cabecera}>
-        <Text style={styles.saludo}>Hola,</Text>
-        <Text style={styles.nombre}>{perfil?.nombre ?? 'Conductor'}</Text>
-      </View>
-
-      {/* Mapa en vivo con dirección exacta y desplazamientos del conductor */}
-      <View style={styles.cardMapaVivo}>
-        <View style={styles.cabeceraMapaVivo}>
-          <View style={styles.filaEstadoEnVivo}>
-            <Text style={styles.tituloMapaVivo}>📍 Tu ubicación actual</Text>
-            {(watching || simulandoMovimiento || isTracking) && (
-              <View style={styles.badgeEnVivo}>
-                <Text style={styles.textoBadgeEnVivo}>
-                  {simulandoMovimiento ? 'SIMULADO EN VIVO' : 'GPS EN VIVO'}
-                </Text>
-              </View>
-            )}
-          </View>
-          <Text style={styles.direccionExactaTexto} numberOfLines={2}>
-            {ubicacionConductor
-              ? cargandoDireccion && !direccionConductor
-                ? 'Obteniendo dirección exacta...'
-                : direccionConductor ??
-                  formatearReferenciaHuancavelica(ubicacionConductor)
-              : 'Esperando señal GPS...'}
-          </Text>
-        </View>
-
-        <View style={styles.contenedorMapaVivo}>
+      <ScrollView
+        style={styles.pantalla}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) + 12 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Mapa operativo protagonista con HUD flotante */}
+        <View
+          style={[
+            styles.contenedorMapaHero,
+            { height: (viajeActivo ? 290 : 275) + Math.max(insets.top, 16) },
+          ]}
+        >
           <MapView
             ref={mapRef}
-            style={styles.mapaVivo}
+            style={styles.mapaHero}
             initialRegion={{
               latitude: ubicacionConductor?.latitude ?? HUANCAVELICA_CENTRO.latitude,
               longitude: ubicacionConductor?.longitude ?? HUANCAVELICA_CENTRO.longitude,
@@ -941,8 +1007,8 @@ export default function PantallaInicio() {
             {ubicacionConductor ? (
               <Marker
                 coordinate={ubicacionConductor}
-                title="🚕 Tú"
-                description={direccionConductor ?? 'Tu ubicación actual'}
+                title="Tu ubicación"
+                description={direccionConductor ?? 'Ubicación actual'}
                 pinColor="#F59E0B"
               />
             ) : null}
@@ -1006,7 +1072,7 @@ export default function PantallaInicio() {
                     latitude: solicitud.origen_lat,
                     longitude: solicitud.origen_lng,
                   }}
-                  title={`Pasajero · ${distanciaKm.toFixed(1)} km`}
+                  title={`S/ ${Number(solicitud.precio_inicial).toFixed(2)} · ${distanciaKm.toFixed(1)} km`}
                   description={solicitud.origen_direccion ?? 'Solicitud cercana'}
                   pinColor="#16A34A"
                 />
@@ -1014,733 +1080,985 @@ export default function PantallaInicio() {
             )}
           </MapView>
 
-          <View style={styles.filaControlesMapa}>
-            {viajeActivo ? (
-              <Pressable
-                style={styles.botonMapaFlotante}
-                onPress={encuadrarRutaViaje}
-              >
-                <Text style={styles.textoBotonMapaFlotante}>🗺️ Ruta</Text>
-              </Pressable>
-            ) : null}
-            <Pressable
-              style={[
-                styles.botonMapaFlotante,
-                seguirEnMapa && styles.botonMapaFlotanteActivo,
-              ]}
-              onPress={alternarSeguirConductor}
-            >
-              <Text
-                style={[
-                  styles.textoBotonMapaFlotante,
-                  seguirEnMapa && styles.textoBotonMapaFlotanteActivo,
-                ]}
-              >
-                {seguirEnMapa ? '🎯 Siguiendo' : '🎯 Centrar'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.central}>
-        <View style={styles.tarjeta}>
+          {/* HUD superior flotante: dirección exacta + ganancias de hoy */}
           <View
+            pointerEvents="box-none"
             style={[
-              styles.punto,
-              isTracking ? styles.puntoActivo : styles.puntoInactivo,
+              styles.hudSuperior,
+              { top: Math.max(insets.top, 12) + 4 },
             ]}
-          />
-          <Text style={styles.estadoTexto}>
-            {isTracking ? 'Conectado' : 'Desconectado'}
-          </Text>
-          <Text style={styles.estadoDetalle}>
-            {isTracking
-              ? 'Tu ubicación se comparte con el mapa incluso con la pantalla bloqueada.'
-              : 'Conéctate para empezar a recibir solicitudes y aparecer en el mapa.'}
-          </Text>
-        </View>
-
-        <Button
-          label={isTracking ? 'Desconectarse' : 'Conectarse'}
-          onPress={() => void alternarConexion()}
-          cargando={operando || loading}
-          variante={isTracking ? 'peligro' : 'primario'}
-          estilo={styles.boton}
-        />
-
-        {!perfil?.telefono_verificado && (
-          <Pressable
-            style={styles.avisoVerificacionConductor}
-            onPress={() => router.push('/(tabs)/perfil')}
           >
-            <Text style={styles.textoAvisoVerificacionConductor}>
-              🔒 Teléfono no verificado. Toca aquí para validarlo en tu Perfil con un código OTP antes de conectarte.
-            </Text>
-          </Pressable>
-        )}
-
-        {(perfil?.estado_documentos !== 'aprobado' || !perfil?.vehiculo?.trim()) && (
-          <Pressable
-            style={styles.avisoVerificacionConductor}
-            onPress={() => router.push('/(tabs)/perfil')}
-          >
-            <Text style={styles.textoAvisoVerificacionConductor}>
-              {perfil?.estado_documentos === 'en_revision'
-                ? '⏳ Tus documentos KYC están en revisión. Toca aquí para ver el estado en tu Perfil.'
-                : perfil?.estado_documentos === 'rechazado'
-                  ? '❌ Documentación KYC rechazada. Toca aquí para corregir tus datos en Mi Perfil.'
-                  : '🪪 Registra tu vehículo, DNI, brevete y SOAT en Mi Perfil para recibir aprobación y conectarte.'}
-            </Text>
-          </Pressable>
-        )}
-
-        {errorTracking ? (
-          <Text style={styles.error}>{errorTracking}</Text>
-        ) : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {mensaje ? <Text style={styles.mensaje}>{mensaje}</Text> : null}
-      </View>
-
-      {/* Selector de Simulación de Ubicación Huancavelica */}
-      <View style={styles.cardSimulador}>
-        <View style={styles.filaSimuladorHeader}>
-          <View style={styles.textosSimulador}>
-            <Text style={styles.tituloSimulador}>📍 Simulación Huancavelica</Text>
-            <Text style={styles.descripcionSimulador}>
-              {simularHuancavelica
-                ? `${puntoSimulado.nombre} (${(ubicacionConductor?.latitude ?? puntoSimulado.latitude).toFixed(4)}, ${(ubicacionConductor?.longitude ?? puntoSimulado.longitude).toFixed(4)})`
-                : 'Ubicación GPS de tu dispositivo'}
-            </Text>
-          </View>
-          <Switch
-            value={simularHuancavelica}
-            onValueChange={(valor) => {
-              setSimularHuancavelica(valor);
-              if (!valor) {
-                setSimulandoMovimiento(false);
-                setPosicionSimulada(null);
-              }
-            }}
-            trackColor={{ false: '#D1D5DB', true: colores.primario }}
-            thumbColor={simularHuancavelica ? '#ffffff' : '#f4f3f4'}
-          />
-        </View>
-
-        {esEmuladorFueraDeHvca && !simularHuancavelica && (
-          <View style={styles.avisoEmulador}>
-            <Text style={styles.textoAvisoEmulador}>
-              ⚠️ Emulador detectado fuera de Huancavelica. Activa la simulación para recibir viajes locales (a menos de 3 km).
-            </Text>
-          </View>
-        )}
-
-        {simularHuancavelica && (
-          <View style={styles.puntosContainer}>
-            <Text style={styles.subtituloSimulador}>Punto de inicio en Huancavelica:</Text>
-            <View style={styles.filaChips}>
-              {PUNTOS_SIMULACION_HVCA.map((p) => {
-                const seleccionado = puntoSimulado.id === p.id;
-                return (
-                  <Pressable
-                    key={p.id}
-                    style={[styles.chipPunto, seleccionado && styles.chipPuntoActivo]}
-                    onPress={() => {
-                      setPuntoSimulado(p);
-                      setPosicionSimulada(null);
-                    }}
-                  >
-                    <Text
-                      style={[styles.textoChip, seleccionado && styles.textoChipActivo]}
-                    >
-                      {p.nombre}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+            <View style={[styles.pillDireccion, sombras.media]}>
+              <View
+                style={[
+                  styles.puntoEstadoHud,
+                  {
+                    backgroundColor: isTracking
+                      ? colores.exito
+                      : colores.textoSuave,
+                  },
+                ]}
+              />
+              <View style={styles.flexUno}>
+                <Text style={styles.etiquetaHud}>
+                  {simulandoMovimiento
+                    ? 'Simulación en vivo'
+                    : watching || isTracking
+                      ? 'GPS en vivo'
+                      : 'Ubicación actual'}
+                </Text>
+                <Text style={styles.direccionHud} numberOfLines={1}>
+                  {textoDireccionActual}
+                </Text>
+              </View>
             </View>
 
             <Pressable
-              style={[
-                styles.botonSimularMovimiento,
-                simulandoMovimiento && styles.botonSimularMovimientoActivo,
+              onPress={() => router.push('/(tabs)/historial')}
+              style={({ pressed }) => [
+                styles.pillGanancias,
+                sombras.media,
+                pressed && styles.presionadoSuave,
               ]}
-              onPress={() => setSimulandoMovimiento((prev) => !prev)}
             >
-              <Text
-                style={[
-                  styles.textoSimularMovimiento,
-                  simulandoMovimiento && styles.textoSimularMovimientoActivo,
-                ]}
-              >
-                {simulandoMovimiento
-                  ? '⏸️ Detener movimiento simulado'
-                  : '▶️ Simular movimiento en vivo'}
+              <Text style={styles.etiquetaGanancias}>HOY</Text>
+              <Text style={styles.valorGanancias}>
+                S/ {gananciasHoy.toFixed(2)}
               </Text>
             </Pressable>
           </View>
-        )}
-      </View>
 
-      {/* Tarjeta de calificación al pasajero tras completar el viaje */}
-      {viajeParaCalificar ? (
-        <View style={styles.radar}>
-          <View style={styles.tarjetaViajeActivo}>
-            <Text style={styles.viajeTitulo}>¡Viaje Finalizado!</Text>
-            <Text style={styles.viajeDetalle}>
-              Califica tu experiencia con el pasajero (S/{' '}
-              {Number(
-                viajeParaCalificar.precio_final ?? viajeParaCalificar.precio_inicial,
-              ).toFixed(2)}
-              )
-            </Text>
-            <View style={styles.filaEstrellas}>
-              {[1, 2, 3, 4, 5].map((n) => (
+          {/* Controles inferiores sobre el mapa: chip discreto simulador + centrar/ruta */}
+          <View pointerEvents="box-none" style={styles.hudInferior}>
+            <Pressable
+              onPress={() => setMostrarSimulador((prev) => !prev)}
+              style={({ pressed }) => [
+                styles.chipModoDemo,
+                simularHuancavelica && styles.chipModoDemoActivo,
+                sombras.suave,
+                pressed && styles.presionadoSuave,
+              ]}
+            >
+              <View
+                style={[
+                  styles.puntoDemo,
+                  {
+                    backgroundColor: simulandoMovimiento
+                      ? colores.accent
+                      : simularHuancavelica
+                        ? colores.exito
+                        : colores.textoSuave,
+                  },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.textoModoDemo,
+                  simularHuancavelica && styles.textoModoDemoActivo,
+                ]}
+              >
+                {simularHuancavelica
+                  ? simulandoMovimiento
+                    ? 'Simulando'
+                    : 'Demo ON'
+                  : 'Simulador'}
+              </Text>
+            </Pressable>
+
+            <View style={styles.filaControlesMapa}>
+              {viajeActivo ? (
                 <Pressable
-                  key={n}
-                  onPress={() => setEstrellasPasajero(n)}
-                  style={styles.botonEstrella}
+                  style={({ pressed }) => [
+                    styles.botonMapaFlotante,
+                    sombras.suave,
+                    pressed && styles.presionadoSuave,
+                  ]}
+                  onPress={encuadrarRutaViaje}
                 >
-                  <Text
-                    style={[
-                      styles.iconoEstrella,
-                      n <= estrellasPasajero
-                        ? styles.estrellaActiva
-                        : styles.estrellaInactiva,
-                    ]}
-                  >
-                    ★
-                  </Text>
+                  <Text style={styles.textoBotonMapaFlotante}>Ver ruta</Text>
                 </Pressable>
-              ))}
-            </View>
-            <View style={styles.filaBotones}>
-              <Button
-                label="Enviar calificación"
-                onPress={() => void enviarCalificacionPasajero()}
-                cargando={operando}
-                estilo={styles.botonViaje}
-              />
-              <Button
-                label="Omitir"
-                variante="secundario"
-                onPress={() => setViajeParaCalificar(null)}
-                estilo={styles.botonViaje}
-              />
-            </View>
-          </View>
-        </View>
-      ) : null}
+              ) : null}
 
-      {viajeActivo ? (
-        <View style={styles.radar}>
-          <View style={styles.tarjetaViajeActivo}>
-            <Text style={styles.viajeTitulo}>Viaje Activo</Text>
-            <Text style={styles.viajeEstadoTexto}>
-              {etiquetaEstadoViaje(viajeActivo.estado)}
-            </Text>
-
-            {/* Resumen de ruta visible en el mapa superior */}
-            <View style={styles.cajaRutaViaje}>
-              <Text style={styles.textoRutaViaje} numberOfLines={2}>
-                🟢 Recojo:{' '}
-                {viajeActivo.origen_direccion ??
-                  formatearReferenciaHuancavelica({
-                    latitude: viajeActivo.origen_lat,
-                    longitude: viajeActivo.origen_lng,
-                  })}
-              </Text>
-              <Text style={styles.textoRutaViaje} numberOfLines={2}>
-                🔴 Destino:{' '}
-                {viajeActivo.destino_direccion ??
-                  formatearReferenciaHuancavelica({
-                    latitude: viajeActivo.destino_lat,
-                    longitude: viajeActivo.destino_lng,
-                  })}
-              </Text>
-            </View>
-
-            {perfilPasajero ? (
-              <View style={styles.cajaPasajero}>
-                <Text style={styles.pasajeroNombre}>
-                  👤 Pasajero: {perfilPasajero.nombre} (★{' '}
-                  {perfilPasajero.calificacion_promedio.toFixed(1)})
+              <Pressable
+                style={({ pressed }) => [
+                  styles.botonMapaFlotante,
+                  seguirEnMapa && styles.botonMapaFlotanteActivo,
+                  sombras.suave,
+                  pressed && styles.presionadoSuave,
+                ]}
+                onPress={alternarSeguirConductor}
+              >
+                <Icono
+                  nombre="objetivo"
+                  size={15}
+                  color={seguirEnMapa ? colores.fondo : colores.primario}
+                />
+                <Text
+                  style={[
+                    styles.textoBotonMapaFlotante,
+                    seguirEnMapa && styles.textoBotonMapaFlotanteActivo,
+                  ]}
+                >
+                  {seguirEnMapa ? 'Siguiendo' : 'Centrar'}
                 </Text>
-                {perfilPasajero.telefono ? (
-                  <Text style={styles.pasajeroTelefono}>
-                    📱 {perfilPasajero.telefono}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
-
-            <Text style={styles.viajePrecio}>
-              S/{' '}
-              {Number(
-                viajeActivo.precio_final ?? viajeActivo.precio_inicial,
-              ).toFixed(2)}
-            </Text>
-
-            <View style={styles.filaContactoViaje}>
-              <Pressable
-                style={styles.botonContacto}
-                onPress={() => void llamarPasajero()}
-              >
-                <Text style={styles.textoContacto}>📞 Llamar</Text>
               </Pressable>
-              <Pressable
-                style={styles.botonContacto}
-                onPress={() => void abrirWhatsAppPasajero()}
-              >
-                <Text style={styles.textoContacto}>💬 WhatsApp</Text>
-              </Pressable>
-              <Pressable
-                style={styles.botonContacto}
-                onPress={() => void abrirNavegacionMaps()}
-              >
-                <Text style={styles.textoContacto}>🗺️ Maps</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.filaBotones}>
-              {viajeActivo.estado === 'aceptado' ? (
-                <Button
-                  label="Llegué al origen"
-                  onPress={() => void llegueAlOrigen()}
-                  cargando={operando}
-                  estilo={styles.botonViaje}
-                />
-              ) : null}
-              {viajeActivo.estado === 'en_camino_origen' ? (
-                <Button
-                  label="Iniciar viaje"
-                  variante="accent"
-                  onPress={() => void iniciarViaje()}
-                  cargando={operando}
-                  estilo={styles.botonViaje}
-                />
-              ) : null}
-              {viajeActivo.estado === 'en_curso' ? (
-                <Button
-                  label="Finalizar Viaje"
-                  variante="peligro"
-                  onPress={() => void finalizarViaje()}
-                  cargando={operando}
-                  estilo={styles.botonViaje}
-                />
-              ) : null}
-              {viajeActivo.estado === 'aceptado' ||
-              viajeActivo.estado === 'en_camino_origen' ? (
-                <Button
-                  label="Cancelar viaje"
-                  variante="secundario"
-                  onPress={cancelarViajeConductor}
-                  deshabilitado={operando}
-                  estilo={styles.botonViaje}
-                />
-              ) : null}
             </View>
           </View>
         </View>
-      ) : null}
 
-      {isTracking && !viajeActivo ? (
-        <View style={styles.radar}>
-          <View style={styles.bloqueVehiculo}>
-            <Text style={styles.radarTitulo}>Mi vehículo</Text>
-            <Input
-              etiqueta="Vehículo (marca, placa)"
-              value={vehiculo}
-              onChangeText={setVehiculo}
-              placeholder="Toyota Corolla · ABC-123"
-              testID="input-vehiculo"
-              style={styles.inputVehiculo}
-            />
-            <Button
-              label="Guardar vehículo"
-              variante="secundario"
-              onPress={() => void guardarVehiculo()}
-              cargando={operando}
-              estilo={styles.botonGuardarVehiculo}
-            />
-          </View>
-          <Text style={styles.radarTitulo}>Solicitudes cercanas</Text>
-          {solicitudesCercanas.length === 0 ? (
-            <Text style={styles.vacio}>
-              Aún no hay solicitudes a menos de {DISTANCIA_MAX_KM} km de tu
-              ubicación.
-            </Text>
-          ) : (
-            solicitudesCercanas.map(({ solicitud, distanciaKm }) => {
-              const ofertada = ofertasEnviadas.has(solicitud.id);
-              const origenTexto =
-                solicitud.origen_direccion ??
-                formatearReferenciaHuancavelica({
-                  latitude: solicitud.origen_lat,
-                  longitude: solicitud.origen_lng,
-                });
-              const destinoTexto =
-                solicitud.destino_direccion ??
-                formatearReferenciaHuancavelica({
-                  latitude: solicitud.destino_lat,
-                  longitude: solicitud.destino_lng,
-                });
-
-              return (
-                <View key={solicitud.id} style={styles.tarjetaSolicitud}>
-                  <Text style={styles.solicitudOrigen}>
-                    🟢 Origen: {origenTexto}
-                  </Text>
-                  <Text style={styles.solicitudDetalle}>
-                    🔴 Destino: {destinoTexto}
-                  </Text>
-                  <View style={styles.filaPrecio}>
-                    <Text style={styles.solicitudPrecio}>
-                      S/ {Number(solicitud.precio_inicial).toFixed(2)}
-                    </Text>
-                    <Text style={styles.solicitudDistancia}>
-                      {distanciaKm < 1
-                        ? `${Math.round(distanciaKm * 1000)} m de ti`
-                        : `${distanciaKm.toFixed(1)} km de ti`}
+        {/* Cuerpo operativo elevado sobre el borde inferior del mapa */}
+        <View style={styles.cuerpoOperativo}>
+          {/* Barra compacta de estado y conexión (visible cuando no hay viaje activo) */}
+          {!viajeActivo ? (
+            <View style={[styles.cardConexion, sombras.suave]}>
+              <View style={styles.filaConexion}>
+                <View style={styles.flexUno}>
+                  <View style={styles.filaSaludoEstado}>
+                    <View
+                      style={[
+                        styles.puntoConexion,
+                        isTracking
+                          ? styles.puntoConexionActivo
+                          : styles.puntoConexionInactivo,
+                      ]}
+                    />
+                    <Text style={styles.textoEstadoConexion}>
+                      {isTracking ? 'En línea' : 'Desconectado'}
                     </Text>
                   </View>
+                  <Text style={styles.subtituloConexion} numberOfLines={1}>
+                    {primerNombre ? `Hola, ${primerNombre}` : 'Conductor'}
+                    {perfil?.vehiculo?.trim() ? ` · ${perfil.vehiculo}` : ''}
+                  </Text>
+                </View>
 
-                  {ofertada ? (
-                    <Text style={styles.ofertada}>Oferta enviada ✓</Text>
-                  ) : (
-                    <>
-                      {contraofertaId === solicitud.id ? (
-                        <Input
-                          etiqueta="Tu contraoferta (S/)"
-                          value={precioContraoferta}
-                          onChangeText={setPrecioContraoferta}
-                          keyboardType="decimal-pad"
-                          placeholder="S/ 6.00"
-                          testID="input-contraoferta"
-                          style={styles.inputContraoferta}
-                        />
-                      ) : null}
-                      <View style={styles.filaBotones}>
-                        <Button
-                          label={`Aceptar (S/ ${Number(
-                            solicitud.precio_inicial,
-                          ).toFixed(2)})`}
-                          onPress={() => void aceptarSolicitud(solicitud)}
-                          cargando={operando}
-                          estilo={styles.botonOferta}
-                        />
-                        {contraofertaId === solicitud.id ? (
-                          <Button
-                            label="Enviar contraoferta"
-                            onPress={() => void confirmarContraoferta(solicitud)}
-                            cargando={operando}
-                            estilo={styles.botonOferta}
+                <Button
+                  label={isTracking ? 'Desconectar' : 'Conectarse'}
+                  onPress={() => void alternarConexion()}
+                  cargando={operando || loading}
+                  variante={isTracking ? 'peligro' : 'primario'}
+                  tamano="md"
+                  estilo={styles.botonConectarCompacto}
+                />
+              </View>
+
+              {requiereTelefono ? (
+                <Pressable
+                  style={styles.avisoRequisito}
+                  onPress={() => router.push('/(tabs)/perfil')}
+                >
+                  <Text style={styles.textoAvisoRequisito}>
+                    Verifica tu celular en Mi Perfil antes de conectarte →
+                  </Text>
+                </Pressable>
+              ) : null}
+
+              {requiereDocs ? (
+                <Pressable
+                  style={styles.avisoRequisito}
+                  onPress={() => router.push('/(tabs)/perfil')}
+                >
+                  <Text style={styles.textoAvisoRequisito}>
+                    {perfil?.estado_documentos === 'en_revision'
+                      ? 'Tus documentos KYC están en revisión. Ver estado en Mi Perfil →'
+                      : perfil?.estado_documentos === 'rechazado'
+                        ? 'Documentación KYC observada. Corregir en Mi Perfil →'
+                        : 'Completa vehículo, DNI, brevete y SOAT en Mi Perfil →'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+
+          {errorTracking ? (
+            <View style={styles.bannerError}>
+              <Text style={styles.textoBannerError}>{errorTracking}</Text>
+            </View>
+          ) : null}
+          {error ? (
+            <View style={styles.bannerError}>
+              <Text style={styles.textoBannerError}>{error}</Text>
+            </View>
+          ) : null}
+          {mensaje ? (
+            <View style={styles.bannerExito}>
+              <Text style={styles.textoBannerExito}>{mensaje}</Text>
+            </View>
+          ) : null}
+
+          {/* Aviso puntual solo si el emulador está fuera de Huancavelica y la simulación apagada */}
+          {esEmuladorFueraDeHvca && !simularHuancavelica && !mostrarSimulador ? (
+            <Pressable
+              style={styles.avisoRequisito}
+              onPress={() => setMostrarSimulador(true)}
+            >
+              <Text style={styles.textoAvisoRequisito}>
+                Emulador fuera de Huancavelica detectado. Toca aquí para abrir el Simulador.
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {/* Panel colapsable de Simulación Huancavelica */}
+          {mostrarSimulador ? (
+            <View style={[styles.cardSimulador, sombras.suave]}>
+              <View style={styles.filaSimuladorHeader}>
+                <View style={styles.textosSimulador}>
+                  <Text style={styles.tituloSimulador}>Simulación Huancavelica</Text>
+                  <Text style={styles.descripcionSimulador}>
+                    {simularHuancavelica
+                      ? `${puntoSimulado.nombre} (${(ubicacionConductor?.latitude ?? puntoSimulado.latitude).toFixed(4)}, ${(ubicacionConductor?.longitude ?? puntoSimulado.longitude).toFixed(4)})`
+                      : 'Usando GPS real del dispositivo'}
+                  </Text>
+                </View>
+                <Switch
+                  value={simularHuancavelica}
+                  onValueChange={(valor) => {
+                    setSimularHuancavelica(valor);
+                    if (!valor) {
+                      setSimulandoMovimiento(false);
+                      setPosicionSimulada(null);
+                    }
+                  }}
+                  trackColor={{ false: '#D1D5DB', true: colores.primario }}
+                  thumbColor={simularHuancavelica ? '#ffffff' : '#f4f3f4'}
+                />
+              </View>
+
+              {simularHuancavelica ? (
+                <View style={styles.puntosContainer}>
+                  <Text style={styles.subtituloSimulador}>
+                    Punto de inicio en Huancavelica:
+                  </Text>
+                  <View style={styles.filaChips}>
+                    {PUNTOS_SIMULACION_HVCA.map((p) => {
+                      const seleccionado = puntoSimulado.id === p.id;
+                      return (
+                        <Pressable
+                          key={p.id}
+                          style={[
+                            styles.chipPunto,
+                            seleccionado && styles.chipPuntoActivo,
+                          ]}
+                          onPress={() => {
+                            setPuntoSimulado(p);
+                            setPosicionSimulada(null);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.textoChip,
+                              seleccionado && styles.textoChipActivo,
+                            ]}
+                          >
+                            {p.nombre}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Pressable
+                    style={[
+                      styles.botonSimularMovimiento,
+                      simulandoMovimiento && styles.botonSimularMovimientoActivo,
+                    ]}
+                    onPress={() => setSimulandoMovimiento((prev) => !prev)}
+                  >
+                    <Text
+                      style={[
+                        styles.textoSimularMovimiento,
+                        simulandoMovimiento && styles.textoSimularMovimientoActivo,
+                      ]}
+                    >
+                      {simulandoMovimiento
+                        ? 'Detener movimiento simulado'
+                        : 'Simular movimiento en vivo'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* Tarjeta de calificación al pasajero tras completar el viaje */}
+          {viajeParaCalificar ? (
+            <View style={[styles.cardViajeActivo, sombras.suave]}>
+              <Text style={styles.tituloViaje}>¡Viaje completado!</Text>
+              <Text style={styles.subtituloViaje}>
+                Cobro final: S/{' '}
+                {Number(
+                  viajeParaCalificar.precio_final ?? viajeParaCalificar.precio_inicial,
+                ).toFixed(2)}{' '}
+                · Califica al pasajero
+              </Text>
+              <View style={styles.filaEstrellas}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Pressable
+                    key={n}
+                    onPress={() => setEstrellasPasajero(n)}
+                    style={styles.botonEstrella}
+                  >
+                    <Text
+                      style={[
+                        styles.iconoEstrella,
+                        n <= estrellasPasajero
+                          ? styles.estrellaActiva
+                          : styles.estrellaInactiva,
+                      ]}
+                    >
+                      ★
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={styles.filaBotones}>
+                <Button
+                  label="Enviar calificación"
+                  onPress={() => void enviarCalificacionPasajero()}
+                  cargando={operando}
+                  estilo={styles.flexUno}
+                />
+                <Button
+                  label="Omitir"
+                  variante="secundario"
+                  onPress={() => setViajeParaCalificar(null)}
+                  estilo={styles.botonOmitir}
+                />
+              </View>
+            </View>
+          ) : null}
+
+          {/* Tarjeta de viaje activo operativa */}
+          {viajeActivo ? (
+            <View style={[styles.cardViajeActivo, sombras.suave]}>
+              {/* Stepper visual de 3 pasos */}
+              <View style={styles.stepper}>
+                {PASOS_CONDUCTOR.map((paso, idx) => {
+                  const completado = pasoActualConductor > idx;
+                  const activo = pasoActualConductor === idx;
+                  return (
+                    <View key={paso.id} style={styles.itemPaso}>
+                      <View style={styles.filaNodoPaso}>
+                        {idx > 0 ? (
+                          <View
+                            style={[
+                              styles.lineaPaso,
+                              pasoActualConductor >= idx && styles.lineaPasoActiva,
+                            ]}
                           />
                         ) : (
+                          <View style={styles.lineaPasoEspaciador} />
+                        )}
+
+                        <View
+                          style={[
+                            styles.nodoPaso,
+                            activo && styles.nodoPasoActivo,
+                            completado && styles.nodoPasoCompletado,
+                          ]}
+                        >
+                          {completado ? (
+                            <Icono nombre="check" size={12} color={colores.fondo} />
+                          ) : (
+                            <Text
+                              style={[
+                                styles.numeroPaso,
+                                (activo || completado) && styles.numeroPasoActivo,
+                              ]}
+                            >
+                              {idx + 1}
+                            </Text>
+                          )}
+                        </View>
+
+                        {idx < PASOS_CONDUCTOR.length - 1 ? (
+                          <View
+                            style={[
+                              styles.lineaPaso,
+                              pasoActualConductor > idx && styles.lineaPasoActiva,
+                            ]}
+                          />
+                        ) : (
+                          <View style={styles.lineaPasoEspaciador} />
+                        )}
+                      </View>
+                      <Text
+                        style={[
+                          styles.labelPaso,
+                          (activo || completado) && styles.labelPasoActivo,
+                        ]}
+                      >
+                        {paso.label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <View style={styles.cabeceraViajeActivo}>
+                <View style={styles.flexUno}>
+                  <Text style={styles.tituloViaje}>Viaje en curso</Text>
+                  <Text style={styles.subtituloViaje}>
+                    {etiquetaEstadoViaje(viajeActivo.estado)}
+                  </Text>
+                </View>
+                <View style={styles.pillPrecioViaje}>
+                  <Text style={styles.textoPrecioViaje}>
+                    S/{' '}
+                    {Number(
+                      viajeActivo.precio_final ?? viajeActivo.precio_inicial,
+                    ).toFixed(2)}
+                  </Text>
+                </View>
+              </View>
+
+              {distanciaObjetivoViaje ? (
+                <View style={styles.bannerDistanciaViaje}>
+                  <Icono nombre="mapa" size={15} color={colores.primario} />
+                  <Text style={styles.textoDistanciaViaje}>
+                    A ~{distanciaObjetivoViaje.minutos} min (
+                    {distanciaObjetivoViaje.km < 1
+                      ? `${Math.round(distanciaObjetivoViaje.km * 1000)} m`
+                      : `${distanciaObjetivoViaje.km.toFixed(1)} km`}
+                    ) del{' '}
+                    {distanciaObjetivoViaje.haciaDestino
+                      ? 'destino'
+                      : 'punto de recojo'}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.cajaRutaViaje}>
+                <RutaVisual
+                  etiquetaOrigen="Recojo"
+                  etiquetaDestino="Destino"
+                  origen={
+                    viajeActivo.origen_direccion ??
+                    formatearReferenciaHuancavelica({
+                      latitude: viajeActivo.origen_lat,
+                      longitude: viajeActivo.origen_lng,
+                    })
+                  }
+                  destino={
+                    viajeActivo.destino_direccion ??
+                    formatearReferenciaHuancavelica({
+                      latitude: viajeActivo.destino_lat,
+                      longitude: viajeActivo.destino_lng,
+                    })
+                  }
+                />
+              </View>
+
+              {perfilPasajero ? (
+                <View style={styles.cardPasajero}>
+                  <View style={styles.avatarPasajero}>
+                    <Text style={styles.textoAvatarPasajero}>
+                      {obtenerIniciales(perfilPasajero.nombre)}
+                    </Text>
+                  </View>
+                  <View style={styles.flexUno}>
+                    <View style={styles.filaNombrePasajero}>
+                      <Text style={styles.pasajeroNombre} numberOfLines={1}>
+                        {perfilPasajero.nombre}
+                      </Text>
+                      <Text style={styles.ratingPasajero}>
+                        ★ {perfilPasajero.calificacion_promedio.toFixed(1)}
+                      </Text>
+                    </View>
+                    {perfilPasajero.telefono ? (
+                      <Text style={styles.pasajeroTelefono}>
+                        {perfilPasajero.telefono}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.filaContactoViaje}>
+                <Pressable
+                  style={[styles.botonContacto, styles.botonLlamar]}
+                  onPress={() => void llamarPasajero()}
+                >
+                  <Text style={[styles.textoContacto, styles.textoLlamar]}>
+                    Llamar
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.botonContacto, styles.botonWhatsApp]}
+                  onPress={() => void abrirWhatsAppPasajero()}
+                >
+                  <Text style={[styles.textoContacto, styles.textoWhatsApp]}>
+                    WhatsApp
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.botonContacto, styles.botonNavegar]}
+                  onPress={() => void abrirNavegacionMaps()}
+                >
+                  <Text style={[styles.textoContacto, styles.textoNavegar]}>
+                    Navegar
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.accionesViaje}>
+                {viajeActivo.estado === 'aceptado' ? (
+                  <Button
+                    label="Llegué al punto de recojo"
+                    onPress={() => void llegueAlOrigen()}
+                    cargando={operando}
+                    tamano="lg"
+                  />
+                ) : null}
+                {viajeActivo.estado === 'en_camino_origen' ? (
+                  <Button
+                    label="Iniciar viaje"
+                    variante="accent"
+                    onPress={() => void iniciarViaje()}
+                    cargando={operando}
+                    tamano="lg"
+                  />
+                ) : null}
+                {viajeActivo.estado === 'en_curso' ? (
+                  <Button
+                    label="Finalizar viaje"
+                    variante="peligro"
+                    onPress={() => void finalizarViaje()}
+                    cargando={operando}
+                    tamano="lg"
+                  />
+                ) : null}
+                {viajeActivo.estado === 'aceptado' ||
+                viajeActivo.estado === 'en_camino_origen' ? (
+                  <Button
+                    label="Cancelar viaje"
+                    variante="secundario"
+                    onPress={cancelarViajeConductor}
+                    deshabilitado={operando}
+                  />
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Radar de solicitudes cercanas (legible en 1 segundo al volante) */}
+          {isTracking && !viajeActivo ? (
+            <View style={styles.seccionRadar}>
+              <View style={styles.cabeceraRadar}>
+                <View style={styles.filaTituloRadar}>
+                  <Text style={styles.radarTitulo}>Solicitudes cercanas</Text>
+                  <View style={styles.pillContadorRadar}>
+                    <Text style={styles.textoContadorRadar}>
+                      {solicitudesCercanas.length}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.etiquetaRadio}>Radio {DISTANCIA_MAX_KM} km</Text>
+              </View>
+
+              {solicitudesCercanas.length === 0 ? (
+                <View style={[styles.cardVacioRadar, sombras.suave]}>
+                  <View style={styles.circuloVacioRadar}>
+                    <Icono nombre="volante" size={26} color={colores.primario} />
+                  </View>
+                  <Text style={styles.tituloVacioRadar}>
+                    Buscando pasajeros cerca de ti
+                  </Text>
+                  <Text style={styles.textoVacioRadar}>
+                    Las solicitudes a menos de {DISTANCIA_MAX_KM} km aparecerán aquí automáticamente.
+                  </Text>
+                </View>
+              ) : (
+                solicitudesCercanas.map(({ solicitud, distanciaKm }) => {
+                  const ofertada = ofertasEnviadas.has(solicitud.id);
+                  const editandoContra = contraofertaId === solicitud.id;
+                  const precioBase = Number(solicitud.precio_inicial);
+                  const origenTexto =
+                    solicitud.origen_direccion ??
+                    formatearReferenciaHuancavelica({
+                      latitude: solicitud.origen_lat,
+                      longitude: solicitud.origen_lng,
+                    });
+                  const destinoTexto =
+                    solicitud.destino_direccion ??
+                    formatearReferenciaHuancavelica({
+                      latitude: solicitud.destino_lat,
+                      longitude: solicitud.destino_lng,
+                    });
+
+                  return (
+                    <View
+                      key={solicitud.id}
+                      style={[styles.tarjetaSolicitud, sombras.suave]}
+                    >
+                      <View style={styles.cabeceraSolicitud}>
+                        <Text style={styles.solicitudPrecio}>
+                          S/ {precioBase.toFixed(2)}
+                        </Text>
+                        <View style={styles.pillDistanciaSolicitud}>
+                          <Text style={styles.textoDistanciaSolicitud}>
+                            {distanciaKm < 1
+                              ? `${Math.round(distanciaKm * 1000)} m`
+                              : `${distanciaKm.toFixed(1)} km`}{' '}
+                            de ti
+                            {solicitud.distancia_km
+                              ? ` · Viaje ${solicitud.distancia_km.toFixed(1)} km`
+                              : ''}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.rutaSolicitud}>
+                        <RutaVisual
+                          origen={origenTexto}
+                          destino={destinoTexto}
+                          compacto
+                        />
+                      </View>
+
+                      {ofertada ? (
+                        <View style={styles.bannerOfertada}>
+                          <Icono
+                            nombre="check"
+                            size={14}
+                            color={colores.exitoOscuro}
+                          />
+                          <Text style={styles.textoOfertada}>
+                            Oferta enviada · Esperando al pasajero
+                          </Text>
+                        </View>
+                      ) : editandoContra ? (
+                        <View style={styles.cajaContraoferta}>
+                          <Text style={styles.etiquetaContraoferta}>
+                            Tu contraoferta rápida:
+                          </Text>
+
+                          {/* Chips de contraoferta en 1 toque (+S/ 1, +S/ 2, +S/ 3) */}
+                          <View style={styles.filaChipsContra}>
+                            {[1, 2, 3].map((incremento) => {
+                              const monto = precioBase + incremento;
+                              return (
+                                <Pressable
+                                  key={incremento}
+                                  onPress={() =>
+                                    setPrecioContraoferta(monto.toFixed(2))
+                                  }
+                                  style={({ pressed }) => [
+                                    styles.chipContra,
+                                    precioContraoferta === monto.toFixed(2) &&
+                                      styles.chipContraActivo,
+                                    pressed && styles.presionadoSuave,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.textoChipContra,
+                                      precioContraoferta === monto.toFixed(2) &&
+                                        styles.textoChipContraActivo,
+                                    ]}
+                                  >
+                                    +S/ {incremento} (S/ {monto.toFixed(0)})
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+
+                          <View style={styles.filaInputContra}>
+                            <View style={styles.cajaInputContra}>
+                              <Text style={styles.prefijoContra}>S/</Text>
+                              <TextInput
+                                value={precioContraoferta}
+                                onChangeText={setPrecioContraoferta}
+                                keyboardType="decimal-pad"
+                                placeholder={(precioBase + 1).toFixed(2)}
+                                placeholderTextColor={colores.textoSuave}
+                                testID="input-contraoferta"
+                                style={styles.inputContraTexto}
+                              />
+                            </View>
+                            <Button
+                              label="Enviar"
+                              tamano="sm"
+                              onPress={() => void confirmarContraoferta(solicitud)}
+                              cargando={operando}
+                              estilo={styles.botonEnviarContra}
+                            />
+                            <Button
+                              label="Cerrar"
+                              variante="secundario"
+                              tamano="sm"
+                              onPress={() => setContraofertaId(null)}
+                            />
+                          </View>
+                        </View>
+                      ) : (
+                        <View style={styles.filaBotones}>
+                          <Button
+                            label={`Aceptar S/ ${precioBase.toFixed(2)}`}
+                            onPress={() => void aceptarSolicitud(solicitud)}
+                            cargando={operando}
+                            estilo={styles.flexUno}
+                          />
                           <Button
                             label="Contraofertar"
                             variante="secundario"
                             onPress={() => abrirContraoferta(solicitud)}
-                            estilo={styles.botonOferta}
+                            estilo={styles.botonContraoferta}
                           />
-                        )}
-                      </View>
-                    </>
-                  )}
-                </View>
-              );
-            })
-          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })
+              )}
+            </View>
+          ) : null}
         </View>
-      ) : null}
-
-      <Pressable onPress={() => void cerrarSesion()} style={styles.logout}>
-        <Text style={styles.logoutTexto}>Cerrar sesión</Text>
-      </Pressable>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  contenedor: {
+  pantalla: {
     flex: 1,
-    backgroundColor: colores.fondo,
+    backgroundColor: colores.superficie,
   },
-  contenido: {
-    padding: 24,
-    paddingBottom: 32,
+  flexUno: {
+    flex: 1,
   },
-  cabecera: {
-    marginTop: 8,
-    marginBottom: 16,
+  presionadoSuave: {
+    opacity: 0.85,
+    transform: [{ scale: 0.97 }],
   },
-  saludo: {
-    fontSize: 16,
+  /* Mapa Hero con HUD */
+  contenedorMapaHero: {
+    width: '100%',
+    position: 'relative',
+    backgroundColor: colores.superficieSecundaria,
+  },
+  mapaHero: {
+    flex: 1,
+  },
+  hudSuperior: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pillDireccion: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: radios.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
+  puntoEstadoHud: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+  },
+  etiquetaHud: {
+    fontSize: 10,
+    fontWeight: '700',
     color: colores.textoSuave,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
-  nombre: {
-    fontSize: 26,
+  direccionHud: {
+    fontSize: 13,
     fontWeight: '700',
     color: colores.texto,
   },
-  central: {
-    maxWidth: 420,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  tarjeta: {
+  pillGanancias: {
+    backgroundColor: colores.primario,
+    borderRadius: radios.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     alignItems: 'center',
-    borderRadius: 16,
+    minWidth: 82,
+  },
+  etiquetaGanancias: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colores.accent,
+    letterSpacing: 0.6,
+  },
+  valorGanancias: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colores.fondo,
+  },
+  hudInferior: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  chipModoDemo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: radios.pill,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
     borderWidth: 1,
     borderColor: colores.borde,
-    padding: 24,
-    marginBottom: 24,
   },
-  punto: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    marginBottom: 10,
+  chipModoDemoActivo: {
+    backgroundColor: colores.primarioSuave,
+    borderColor: colores.primarioBorde,
   },
-  puntoActivo: {
+  puntoDemo: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  textoModoDemo: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colores.textoSecundario,
+  },
+  textoModoDemoActivo: {
+    color: colores.primario,
+  },
+  filaControlesMapa: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  botonMapaFlotante: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: radios.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
+  botonMapaFlotanteActivo: {
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
+  },
+  textoBotonMapaFlotante: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  textoBotonMapaFlotanteActivo: {
+    color: colores.fondo,
+  },
+  /* Cuerpo operativo */
+  cuerpoOperativo: {
+    marginTop: -16,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: colores.superficie,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    gap: 12,
+  },
+  cardConexion: {
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 14,
+  },
+  filaConexion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  filaSaludoEstado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  puntoConexion: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  puntoConexionActivo: {
     backgroundColor: colores.exito,
   },
-  puntoInactivo: {
+  puntoConexionInactivo: {
     backgroundColor: colores.textoSuave,
-    opacity: 0.4,
+    opacity: 0.45,
   },
-  estadoTexto: {
-    fontSize: 20,
-    fontWeight: '700',
+  textoEstadoConexion: {
+    fontSize: 17,
+    fontWeight: '800',
     color: colores.texto,
   },
-  estadoDetalle: {
-    marginTop: 8,
-    fontSize: 14,
-    color: colores.textoSuave,
-    textAlign: 'center',
-  },
-  boton: {
-    minHeight: 72,
-    borderRadius: 24,
-  },
-  error: {
-    marginTop: 16,
-    color: colores.peligro,
-    textAlign: 'center',
-  },
-  mensaje: {
-    marginTop: 16,
-    color: colores.exito,
-    textAlign: 'center',
-  },
-  radar: {
-    maxWidth: 420,
-    width: '100%',
-    alignSelf: 'center',
-    marginTop: 24,
-  },
-  radarTitulo: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colores.texto,
-    marginBottom: 12,
-  },
-  vacio: {
-    color: colores.textoSuave,
-  },
-  tarjetaSolicitud: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colores.borde,
-    padding: 16,
-    marginBottom: 12,
-    backgroundColor: '#FAFAFA',
-  },
-  solicitudOrigen: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colores.texto,
-  },
-  solicitudDetalle: {
-    fontSize: 13,
-    color: colores.textoSuave,
-    marginTop: 4,
-  },
-  filaPrecio: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  solicitudPrecio: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colores.primario,
-  },
-  solicitudDistancia: {
-    fontSize: 13,
-    color: colores.textoSuave,
-  },
-  filaBotones: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  botonOferta: {
-    flex: 1,
-    minHeight: 44,
-    paddingHorizontal: 8,
-  },
-  inputContraoferta: {
-    marginBottom: 12,
-  },
-  ofertada: {
-    color: colores.exito,
-    fontWeight: '600',
-  },
-  tarjetaViajeActivo: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colores.primario,
-    padding: 16,
-    backgroundColor: '#FAFAFA',
-  },
-  viajeTitulo: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colores.primario,
-    marginBottom: 4,
-  },
-  viajeEstadoTexto: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colores.primario,
-    marginBottom: 12,
-  },
-  mapaCompactoContenedor: {
-    height: 190,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colores.borde,
-    marginBottom: 12,
-  },
-  mapaCompacto: {
-    flex: 1,
-  },
-  cajaPasajero: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    marginBottom: 10,
-  },
-  pasajeroNombre: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1E3A8A',
-  },
-  pasajeroTelefono: {
+  subtituloConexion: {
     fontSize: 12,
-    color: '#1D4ED8',
+    color: colores.textoSuave,
     marginTop: 2,
   },
-  viajeOrigen: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colores.texto,
+  botonConectarCompacto: {
+    minWidth: 126,
+    paddingHorizontal: 16,
   },
-  viajeDetalle: {
-    fontSize: 13,
-    color: colores.textoSuave,
-    marginTop: 4,
-  },
-  viajePrecio: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colores.primario,
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  filaContactoViaje: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 6,
-  },
-  botonContacto: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
+  avisoRequisito: {
+    backgroundColor: colores.accentSuave,
     borderWidth: 1,
-    borderColor: colores.borde,
-    borderRadius: 10,
+    borderColor: '#F59E0B',
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
     paddingVertical: 9,
-    alignItems: 'center',
+    marginTop: 10,
   },
-  textoContacto: {
+  textoAvisoRequisito: {
     fontSize: 12,
-    fontWeight: '700',
-    color: colores.texto,
+    fontWeight: '600',
+    color: colores.accentOscuro,
+    lineHeight: 16,
   },
-  filaEstrellas: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    marginVertical: 10,
+  bannerError: {
+    backgroundColor: colores.peligroSuave,
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
-  botonEstrella: {
-    padding: 4,
-  },
-  iconoEstrella: {
-    fontSize: 30,
-  },
-  estrellaActiva: {
-    color: '#F59E0B',
-  },
-  estrellaInactiva: {
-    color: '#D1D5DB',
-  },
-  botonViaje: {
-    flex: 1,
-    minHeight: 44,
-    paddingHorizontal: 8,
-  },
-  bloqueVehiculo: {
-    borderWidth: 1,
-    borderColor: colores.borde,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  inputVehiculo: {
-    marginBottom: 12,
-  },
-  botonGuardarVehiculo: {
-    minHeight: 44,
-  },
-  logout: {
-    alignSelf: 'center',
-    padding: 12,
-    marginTop: 8,
-  },
-  logoutTexto: {
-    color: colores.textoSuave,
+  textoBannerError: {
+    color: colores.peligroOscuro,
+    fontSize: 13,
     fontWeight: '600',
   },
+  bannerExito: {
+    backgroundColor: colores.exitoSuave,
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  textoBannerExito: {
+    color: colores.exitoOscuro,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  /* Simulador colapsable */
   cardSimulador: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
+    padding: 15,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    borderColor: colores.borde,
   },
   filaSimuladorHeader: {
     flexDirection: 'row',
@@ -1761,23 +2079,10 @@ const styles = StyleSheet.create({
     color: colores.textoSuave,
     marginTop: 2,
   },
-  avisoEmulador: {
-    backgroundColor: '#FEF3C7',
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-  },
-  textoAvisoEmulador: {
-    fontSize: 12,
-    color: '#92400E',
-    lineHeight: 16,
-  },
   puntosContainer: {
-    marginTop: 14,
+    marginTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: colores.bordeSuave,
     paddingTop: 12,
   },
   subtituloSimulador: {
@@ -1794,10 +2099,10 @@ const styles = StyleSheet.create({
   chipPunto: {
     paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
+    borderRadius: radios.pill,
+    backgroundColor: colores.superficieSecundaria,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colores.borde,
   },
   chipPuntoActivo: {
     backgroundColor: colores.primario,
@@ -1805,154 +2110,466 @@ const styles = StyleSheet.create({
   },
   textoChip: {
     fontSize: 12,
-    fontWeight: '500',
-    color: colores.texto,
+    fontWeight: '600',
+    color: colores.textoSecundario,
   },
   textoChipActivo: {
-    color: '#FFFFFF',
+    color: colores.fondo,
     fontWeight: '700',
-  },
-  avisoVerificacionConductor: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#F59E0B',
-    borderRadius: 12,
-    padding: 10,
-    marginTop: 12,
-  },
-  textoAvisoVerificacionConductor: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#92400E',
-    lineHeight: 16,
-    textAlign: 'center',
-  },
-  cardMapaVivo: {
-    maxWidth: 420,
-    width: '100%',
-    alignSelf: 'center',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colores.borde,
-    backgroundColor: colores.fondo,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  cabeceraMapaVivo: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colores.borde,
-  },
-  filaEstadoEnVivo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 4,
-  },
-  tituloMapaVivo: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colores.textoSuave,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  badgeEnVivo: {
-    backgroundColor: '#DCFCE7',
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: '#86EFAC',
-  },
-  textoBadgeEnVivo: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  direccionExactaTexto: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colores.texto,
-    lineHeight: 20,
-  },
-  contenedorMapaVivo: {
-    height: 220,
-    width: '100%',
-    position: 'relative',
-  },
-  mapaVivo: {
-    flex: 1,
-  },
-  filaControlesMapa: {
-    position: 'absolute',
-    right: 10,
-    bottom: 10,
-    flexDirection: 'row',
-    gap: 6,
-  },
-  botonMapaFlotante: {
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: colores.borde,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-  },
-  botonMapaFlotanteActivo: {
-    backgroundColor: colores.primario,
-    borderColor: colores.primario,
-  },
-  textoBotonMapaFlotante: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colores.texto,
-  },
-  textoBotonMapaFlotanteActivo: {
-    color: '#FFFFFF',
   },
   botonSimularMovimiento: {
     marginTop: 12,
-    borderRadius: 10,
+    borderRadius: radios.md,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: '#EFF6FF',
+    backgroundColor: colores.primarioSuave,
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: colores.primarioBorde,
     alignItems: 'center',
   },
   botonSimularMovimientoActivo: {
-    backgroundColor: '#1E3A8A',
-    borderColor: '#1E3A8A',
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
   },
   textoSimularMovimiento: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1D4ED8',
+    color: colores.primario,
   },
   textoSimularMovimientoActivo: {
-    color: '#FFFFFF',
+    color: colores.fondo,
   },
-  cajaRutaViaje: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
+  /* Viaje activo */
+  cardViajeActivo: {
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
     borderWidth: 1,
     borderColor: colores.borde,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 12,
-    gap: 4,
+    padding: 16,
   },
-  textoRutaViaje: {
-    fontSize: 13,
+  stepper: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  itemPaso: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  filaNodoPaso: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+  },
+  lineaPaso: {
+    flex: 1,
+    height: 2,
+    backgroundColor: colores.borde,
+  },
+  lineaPasoActiva: {
+    backgroundColor: colores.primario,
+  },
+  lineaPasoEspaciador: {
+    flex: 1,
+  },
+  nodoPaso: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colores.superficieSecundaria,
+    borderWidth: 1.5,
+    borderColor: colores.borde,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nodoPasoActivo: {
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
+  },
+  nodoPasoCompletado: {
+    backgroundColor: colores.exito,
+    borderColor: colores.exito,
+  },
+  numeroPaso: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colores.textoSuave,
+  },
+  numeroPasoActivo: {
+    color: colores.fondo,
+  },
+  labelPaso: {
+    fontSize: 11,
     fontWeight: '600',
+    color: colores.textoSuave,
+    marginTop: 4,
+  },
+  labelPasoActivo: {
     color: colores.texto,
+    fontWeight: '700',
+  },
+  cabeceraViajeActivo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  tituloViaje: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colores.texto,
+    letterSpacing: -0.3,
+  },
+  subtituloViaje: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
+  pillPrecioViaje: {
+    backgroundColor: colores.primarioSuave,
+    borderWidth: 1,
+    borderColor: colores.primarioBorde,
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  textoPrecioViaje: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colores.primario,
+  },
+  bannerDistanciaViaje: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colores.primarioSuave,
+    borderWidth: 1,
+    borderColor: colores.primarioBorde,
+    borderRadius: radios.md,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 12,
+  },
+  textoDistanciaViaje: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.primario,
+  },
+  cajaRutaViaje: {
+    backgroundColor: colores.superficie,
+    borderRadius: radios.md,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 12,
+    marginBottom: 12,
+  },
+  cardPasajero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colores.superficie,
+    borderRadius: radios.md,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 11,
+    marginBottom: 12,
+  },
+  avatarPasajero: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colores.primario,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textoAvatarPasajero: {
+    color: colores.fondo,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  filaNombrePasajero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pasajeroNombre: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colores.texto,
+    flexShrink: 1,
+  },
+  ratingPasajero: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+  pasajeroTelefono: {
+    fontSize: 12,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
+  filaContactoViaje: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  botonContacto: {
+    flex: 1,
+    borderRadius: radios.md,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+  },
+  botonLlamar: {
+    backgroundColor: colores.primarioSuave,
+    borderColor: colores.primarioBorde,
+  },
+  botonWhatsApp: {
+    backgroundColor: colores.exitoSuave,
+    borderColor: colores.exitoBorde,
+  },
+  botonNavegar: {
+    backgroundColor: colores.superficieSecundaria,
+    borderColor: colores.borde,
+  },
+  textoContacto: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  textoLlamar: {
+    color: colores.primario,
+  },
+  textoWhatsApp: {
+    color: colores.exitoOscuro,
+  },
+  textoNavegar: {
+    color: colores.texto,
+  },
+  accionesViaje: {
+    gap: 8,
+  },
+  /* Calificación */
+  filaEstrellas: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginVertical: 12,
+  },
+  botonEstrella: {
+    padding: 4,
+  },
+  iconoEstrella: {
+    fontSize: 32,
+  },
+  estrellaActiva: {
+    color: '#F59E0B',
+  },
+  estrellaInactiva: {
+    color: '#D1D5DB',
+  },
+  botonOmitir: {
+    minWidth: 96,
+  },
+  /* Radar de solicitudes */
+  seccionRadar: {
+    gap: 10,
+  },
+  cabeceraRadar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  filaTituloRadar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  radarTitulo: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: colores.texto,
+    letterSpacing: -0.2,
+  },
+  pillContadorRadar: {
+    backgroundColor: colores.primario,
+    borderRadius: radios.pill,
+    minWidth: 24,
+    height: 24,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textoContadorRadar: {
+    color: colores.fondo,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  etiquetaRadio: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colores.textoSuave,
+  },
+  cardVacioRadar: {
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 22,
+    alignItems: 'center',
+  },
+  circuloVacioRadar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colores.primarioSuave,
+    borderWidth: 1,
+    borderColor: colores.primarioBorde,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  tituloVacioRadar: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colores.texto,
+  },
+  textoVacioRadar: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  tarjetaSolicitud: {
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 15,
+  },
+  cabeceraSolicitud: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  solicitudPrecio: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colores.primario,
+    letterSpacing: -0.4,
+  },
+  pillDistanciaSolicitud: {
+    backgroundColor: colores.superficieSecundaria,
+    borderRadius: radios.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
+  textoDistanciaSolicitud: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colores.textoSecundario,
+  },
+  rutaSolicitud: {
+    marginBottom: 12,
+  },
+  bannerOfertada: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colores.exitoSuave,
+    borderWidth: 1,
+    borderColor: colores.exitoBorde,
+    borderRadius: radios.md,
+    paddingVertical: 9,
+  },
+  textoOfertada: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colores.exitoOscuro,
+  },
+  filaBotones: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  botonContraoferta: {
+    minWidth: 124,
+    paddingHorizontal: 12,
+  },
+  /* Contraoferta rápida */
+  cajaContraoferta: {
+    backgroundColor: colores.superficie,
+    borderRadius: radios.md,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    padding: 10,
+    gap: 8,
+  },
+  etiquetaContraoferta: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.textoSecundario,
+  },
+  filaChipsContra: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  chipContra: {
+    flex: 1,
+    backgroundColor: colores.fondo,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    borderRadius: radios.sm + 2,
+    paddingVertical: 7,
+    alignItems: 'center',
+  },
+  chipContraActivo: {
+    backgroundColor: colores.primarioSuave,
+    borderColor: colores.primario,
+  },
+  textoChipContra: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colores.textoSecundario,
+  },
+  textoChipContraActivo: {
+    color: colores.primario,
+  },
+  filaInputContra: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cajaInputContra: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colores.fondo,
+    borderWidth: 1.5,
+    borderColor: colores.primario,
+    borderRadius: radios.sm + 2,
+    paddingHorizontal: 10,
+    height: 38,
+  },
+  prefijoContra: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colores.textoSuave,
+    marginRight: 4,
+  },
+  inputContraTexto: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: colores.texto,
+    paddingVertical: 0,
+  },
+  botonEnviarContra: {
+    minWidth: 74,
   },
 });
