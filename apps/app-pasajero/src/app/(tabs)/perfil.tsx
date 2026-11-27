@@ -7,17 +7,20 @@ import {
   View,
 } from 'react-native';
 import { Redirect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
-  PantallaCentrada,
   SeccionVerificacionTelefono,
   authRepository,
   colores,
+  radios,
+  sombras,
   useAuthStore,
 } from '@hvca/shared';
 
 export default function PantallaPerfilPasajero() {
+  const insets = useSafeAreaInsets();
   const { session, perfil } = useAuthStore();
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
 
@@ -54,75 +57,134 @@ export default function PantallaPerfilPasajero() {
     .toUpperCase();
 
   return (
-    <PantallaCentrada>
+    <View style={styles.pantalla}>
+      <View
+        style={[
+          styles.cabeceraSuperior,
+          { paddingTop: Math.max(insets.top, 16) + 4 },
+        ]}
+      >
+        <Text style={styles.tituloPantalla}>Mi Perfil</Text>
+        <Text style={styles.subtituloPantalla}>
+          Tu cuenta y seguridad de pasajero
+        </Text>
+      </View>
+
       <ScrollView
-        contentContainerStyle={styles.contenido}
+        contentContainerStyle={[
+          styles.contenido,
+          { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Cabecera del Perfil */}
-        <View style={styles.headerPerfil}>
-          <View style={styles.avatar}>
-            <Text style={styles.textoAvatar}>{iniciales}</Text>
-          </View>
+        <View style={styles.columnaCentral}>
+          {/* Cabecera del Perfil */}
+          <View style={[styles.headerPerfil, sombras.suave]}>
+            <View style={styles.avatar}>
+              <Text style={styles.textoAvatar}>{iniciales}</Text>
+            </View>
 
-          <View style={styles.infoUsuario}>
-            <Text style={styles.nombre}>{perfil?.nombre || 'Pasajero Taxi HVCA'}</Text>
-            <Text style={styles.email}>{session.user.email || 'Sin correo asociado'}</Text>
-            <View style={styles.badgeRol}>
-              <Text style={styles.textoBadgeRol}>PASAJERO</Text>
+            <View style={styles.infoUsuario}>
+              <Text style={styles.nombre} numberOfLines={1}>
+                {perfil?.nombre || 'Pasajero Taxi HVCA'}
+              </Text>
+              <Text style={styles.email} numberOfLines={1}>
+                {session.user.email || 'Sin correo asociado'}
+              </Text>
+              <View style={styles.badgeRol}>
+                <Text style={styles.textoBadgeRol}>PASAJERO</Text>
+              </View>
             </View>
           </View>
-        </View>
 
-        {/* Métrica / Reputación */}
-        <View style={styles.filaMetricas}>
-          <View style={styles.cardMetrica}>
-            <Text style={styles.valorMetrica}>
-              ★ {(perfil?.calificacion_promedio ?? 5.0).toFixed(1)}
-            </Text>
-            <Text style={styles.etiquetaMetrica}>Calificación</Text>
+          {/* Métrica / Reputación */}
+          <View style={styles.filaMetricas}>
+            <View style={[styles.cardMetrica, sombras.suave]}>
+              <Text style={styles.valorMetrica}>
+                <Text style={styles.estrellaDorada}>★ </Text>
+                {(perfil?.calificacion_promedio ?? 5.0).toFixed(1)}
+              </Text>
+              <Text style={styles.etiquetaMetrica}>Calificación</Text>
+            </View>
+            <View style={[styles.cardMetrica, sombras.suave]}>
+              <View style={styles.filaEstadoMetrica}>
+                <View
+                  style={[
+                    styles.puntoEstado,
+                    {
+                      backgroundColor: perfil?.telefono_verificado
+                        ? colores.exito
+                        : colores.accent,
+                    },
+                  ]}
+                />
+                <Text style={styles.valorMetrica}>
+                  {perfil?.telefono_verificado ? 'Verificado' : 'Pendiente'}
+                </Text>
+              </View>
+              <Text style={styles.etiquetaMetrica}>Teléfono</Text>
+            </View>
           </View>
-          <View style={styles.cardMetrica}>
-            <Text style={styles.valorMetrica}>
-              {perfil?.telefono_verificado ? '100%' : 'Incompleto'}
-            </Text>
-            <Text style={styles.etiquetaMetrica}>Perfil</Text>
-          </View>
+
+          {/* Sección de Validación Telefónica contra números falsos */}
+          <SeccionVerificacionTelefono perfil={perfil} />
+
+          {/* Botón de Cierre de Sesión */}
+          <Button
+            label="Cerrar Sesión"
+            variante="peligro"
+            onPress={handleCerrarSesion}
+            cargando={cerrandoSesion}
+            estilo={styles.botonSalir}
+          />
         </View>
-
-        {/* Sección de Validación Telefónica contra números falsos */}
-        <SeccionVerificacionTelefono perfil={perfil} />
-
-        {/* Botón de Cierre de Sesión */}
-        <Button
-          label="Cerrar Sesión"
-          variante="peligro"
-          onPress={handleCerrarSesion}
-          cargando={cerrandoSesion}
-          estilo={styles.botonSalir}
-        />
       </ScrollView>
-    </PantallaCentrada>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pantalla: {
+    flex: 1,
+    backgroundColor: colores.superficie,
+  },
+  cabeceraSuperior: {
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+    backgroundColor: colores.fondo,
+    borderBottomWidth: 1,
+    borderBottomColor: colores.borde,
+  },
+  tituloPantalla: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colores.texto,
+    letterSpacing: -0.3,
+  },
+  subtituloPantalla: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
   contenido: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  columnaCentral: {
     width: '100%',
     maxWidth: 480,
-    paddingVertical: 20,
   },
   headerPerfil: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colores.fondo,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: radios.lg,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 16,
+    borderColor: colores.borde,
+    marginBottom: 12,
   },
   avatar: {
     width: 60,
@@ -133,7 +195,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   textoAvatar: {
-    color: '#FFFFFF',
+    color: colores.fondo,
     fontSize: 22,
     fontWeight: '800',
   },
@@ -151,45 +213,60 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   badgeRol: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: colores.primarioSuave,
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingVertical: 3,
+    borderRadius: radios.sm - 2,
     marginTop: 6,
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: colores.primarioBorde,
   },
   textoBadgeRol: {
-    color: '#1D4ED8',
+    color: colores.primario,
     fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.4,
   },
   filaMetricas: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   cardMetrica: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg - 2,
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colores.borde,
+  },
+  filaEstadoMetrica: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  puntoEstado: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  estrellaDorada: {
+    color: '#F59E0B',
   },
   valorMetrica: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: colores.texto,
   },
   etiquetaMetrica: {
     fontSize: 11,
     color: colores.textoSuave,
-    marginTop: 2,
+    marginTop: 3,
+    fontWeight: '600',
   },
   botonSalir: {
-    marginTop: 16,
+    marginTop: 12,
   },
 });

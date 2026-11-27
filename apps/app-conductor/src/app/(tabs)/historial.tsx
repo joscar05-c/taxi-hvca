@@ -12,26 +12,32 @@ import { Redirect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  Icono,
+  RutaVisual,
   colores,
   formatearReferenciaHuancavelica,
+  radios,
+  sombras,
   useAuthStore,
   viajesRepository,
   type SolicitudEstado,
   type SolicitudViaje,
 } from '@hvca/shared';
 
+type FiltroHistorial = 'todos' | 'completado' | 'cancelada';
+
 function etiquetaEstado(estado: SolicitudEstado): { texto: string; bg: string; fg: string } {
   switch (estado) {
     case 'completado':
-      return { texto: 'Completado', bg: '#DCFCE7', fg: '#166534' };
+      return { texto: 'Completado', bg: colores.exitoSuave, fg: colores.exitoOscuro };
     case 'cancelada':
-      return { texto: 'Cancelado', bg: '#FEE2E2', fg: '#991B1B' };
+      return { texto: 'Cancelado', bg: colores.peligroSuave, fg: colores.peligroOscuro };
     case 'buscando':
-      return { texto: 'Buscando', bg: '#FEF3C7', fg: '#92400E' };
+      return { texto: 'Buscando', bg: colores.accentSuave, fg: colores.accentOscuro };
     case 'aceptado':
     case 'en_camino_origen':
     case 'en_curso':
-      return { texto: 'En progreso', bg: '#DBEAFE', fg: '#1E40AF' };
+      return { texto: 'En progreso', bg: colores.primarioSuave, fg: colores.primario };
   }
 }
 
@@ -41,6 +47,7 @@ export default function PantallaHistorialConductor() {
   const [viajes, setViajes] = useState<SolicitudViaje[]>([]);
   const [cargando, setCargando] = useState(true);
   const [calificandoId, setCalificandoId] = useState<string | null>(null);
+  const [filtro, setFiltro] = useState<FiltroHistorial>('todos');
 
   const userId = session?.user?.id;
 
@@ -62,15 +69,23 @@ export default function PantallaHistorialConductor() {
 
   const resumen = useMemo(() => {
     const completados = viajes.filter((v) => v.estado === 'completado');
+    const cancelados = viajes.filter((v) => v.estado === 'cancelada');
     const ingresos = completados.reduce(
       (acc, v) => acc + Number(v.precio_final ?? v.precio_inicial ?? 0),
       0,
     );
     return {
+      totalTodos: viajes.length,
       totalCompletados: completados.length,
+      totalCancelados: cancelados.length,
       totalIngresos: ingresos,
     };
   }, [viajes]);
+
+  const viajesFiltrados = useMemo(() => {
+    if (filtro === 'todos') return viajes;
+    return viajes.filter((v) => v.estado === filtro);
+  }, [viajes, filtro]);
 
   if (!session) {
     return <Redirect href="/login" />;
@@ -101,9 +116,20 @@ export default function PantallaHistorialConductor() {
     }
   }
 
+  const opcionesFiltro: Array<{ id: FiltroHistorial; label: string; count: number }> = [
+    { id: 'todos', label: 'Todos', count: resumen.totalTodos },
+    { id: 'completado', label: 'Completados', count: resumen.totalCompletados },
+    { id: 'cancelada', label: 'Cancelados', count: resumen.totalCancelados },
+  ];
+
   return (
-    <View style={[styles.contenedor, { paddingTop: Math.max(insets.top, 16) }]}>
-      <View style={styles.cabecera}>
+    <View style={styles.contenedor}>
+      <View
+        style={[
+          styles.cabecera,
+          { paddingTop: Math.max(insets.top, 16) + 4 },
+        ]}
+      >
         <Text style={styles.titulo}>Mis Viajes e Ingresos</Text>
         <Text style={styles.subtitulo}>
           Resumen en tiempo real de tus carreras realizadas
@@ -114,12 +140,34 @@ export default function PantallaHistorialConductor() {
             <Text style={styles.valorResumen}>{resumen.totalCompletados}</Text>
             <Text style={styles.etiquetaResumen}>Viajes Completados</Text>
           </View>
-          <View style={styles.cardResumen}>
-            <Text style={[styles.valorResumen, { color: colores.exito }]}>
+          <View style={[styles.cardResumen, styles.cardIngresos]}>
+            <Text style={[styles.valorResumen, { color: colores.exitoOscuro }]}>
               S/ {resumen.totalIngresos.toFixed(2)}
             </Text>
             <Text style={styles.etiquetaResumen}>Ingresos Totales</Text>
           </View>
+        </View>
+
+        <View style={styles.filaFiltros}>
+          {opcionesFiltro.map((op) => {
+            const activo = filtro === op.id;
+            return (
+              <Pressable
+                key={op.id}
+                onPress={() => setFiltro(op.id)}
+                style={[styles.chipFiltro, activo && styles.chipFiltroActivo]}
+              >
+                <Text
+                  style={[
+                    styles.textoChipFiltro,
+                    activo && styles.textoChipFiltroActivo,
+                  ]}
+                >
+                  {op.label} ({op.count})
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       </View>
 
@@ -128,12 +176,20 @@ export default function PantallaHistorialConductor() {
           <ActivityIndicator size="large" color={colores.primario} />
           <Text style={styles.textoVacio}>Cargando historial...</Text>
         </View>
-      ) : viajes.length === 0 ? (
+      ) : viajesFiltrados.length === 0 ? (
         <View style={styles.centrado}>
-          <Text style={styles.iconoVacio}>🚕</Text>
-          <Text style={styles.tituloVacio}>Aún no tienes carreras registradas</Text>
+          <View style={styles.circuloVacio}>
+            <Icono nombre="taxi" size={32} color={colores.primario} />
+          </View>
+          <Text style={styles.tituloVacio}>
+            {filtro === 'todos'
+              ? 'Aún no tienes carreras registradas'
+              : 'No hay carreras en esta categoría'}
+          </Text>
           <Text style={styles.textoVacio}>
-            Conéctate en la pestaña Inicio para aceptar solicitudes cercanas.
+            {filtro === 'todos'
+              ? 'Conéctate en la pestaña Inicio para aceptar solicitudes cercanas.'
+              : 'Prueba seleccionar otro filtro para ver el resto de tus carreras.'}
           </Text>
         </View>
       ) : (
@@ -142,8 +198,9 @@ export default function PantallaHistorialConductor() {
             styles.lista,
             { paddingBottom: Math.max(insets.bottom, 24) },
           ]}
+          showsVerticalScrollIndicator={false}
         >
-          {viajes.map((v) => {
+          {viajesFiltrados.map((v) => {
             const badge = etiquetaEstado(v.estado);
             const origenTxt =
               v.origen_direccion ??
@@ -160,7 +217,7 @@ export default function PantallaHistorialConductor() {
             const precioMostrado = v.precio_final ?? v.precio_inicial;
 
             return (
-              <View key={v.id} style={styles.tarjeta}>
+              <View key={v.id} style={[styles.tarjeta, sombras.suave]}>
                 <View style={styles.filaSuperior}>
                   <View style={[styles.badge, { backgroundColor: badge.bg }]}>
                     <Text style={[styles.textoBadge, { color: badge.fg }]}>
@@ -177,12 +234,7 @@ export default function PantallaHistorialConductor() {
                   </Text>
                 </View>
 
-                <Text style={styles.rutaLinea} numberOfLines={1}>
-                  🟢 {origenTxt}
-                </Text>
-                <Text style={styles.rutaLinea} numberOfLines={1}>
-                  🔴 {destinoTxt}
-                </Text>
+                <RutaVisual origen={origenTxt} destino={destinoTxt} compacto />
 
                 <View style={styles.filaInferior}>
                   <Text style={styles.precio}>
@@ -231,7 +283,7 @@ export default function PantallaHistorialConductor() {
 const styles = StyleSheet.create({
   contenedor: {
     flex: 1,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: colores.superficie,
   },
   cabecera: {
     paddingHorizontal: 20,
@@ -244,6 +296,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: colores.texto,
+    letterSpacing: -0.3,
   },
   subtitulo: {
     fontSize: 13,
@@ -257,12 +310,16 @@ const styles = StyleSheet.create({
   },
   cardResumen: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
+    backgroundColor: colores.superficie,
+    borderRadius: radios.md,
     padding: 12,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colores.borde,
+  },
+  cardIngresos: {
+    backgroundColor: colores.exitoSuave,
+    borderColor: colores.exitoBorde,
   },
   valorResumen: {
     fontSize: 18,
@@ -271,9 +328,35 @@ const styles = StyleSheet.create({
   },
   etiquetaResumen: {
     fontSize: 11,
-    color: colores.textoSuave,
+    color: colores.textoSecundario,
     marginTop: 2,
     fontWeight: '600',
+  },
+  filaFiltros: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  chipFiltro: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radios.pill,
+    backgroundColor: colores.superficieSecundaria,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
+  chipFiltroActivo: {
+    backgroundColor: colores.primario,
+    borderColor: colores.primario,
+  },
+  textoChipFiltro: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colores.textoSecundario,
+  },
+  textoChipFiltroActivo: {
+    color: colores.fondo,
+    fontWeight: '700',
   },
   centrado: {
     flex: 1,
@@ -281,21 +364,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 32,
   },
-  iconoVacio: {
-    fontSize: 40,
-    marginBottom: 10,
+  circuloVacio: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: colores.primarioSuave,
+    borderWidth: 1,
+    borderColor: colores.primarioBorde,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
   },
   tituloVacio: {
     fontSize: 16,
     fontWeight: '700',
     color: colores.texto,
     marginBottom: 4,
+    textAlign: 'center',
   },
   textoVacio: {
     fontSize: 13,
     color: colores.textoSuave,
     textAlign: 'center',
-    marginTop: 6,
+    marginTop: 4,
+    lineHeight: 19,
   },
   lista: {
     padding: 16,
@@ -303,8 +395,8 @@ const styles = StyleSheet.create({
   },
   tarjeta: {
     backgroundColor: colores.fondo,
-    borderRadius: 14,
-    padding: 14,
+    borderRadius: radios.lg,
+    padding: 15,
     borderWidth: 1,
     borderColor: colores.borde,
   },
@@ -312,12 +404,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   badge: {
     paddingHorizontal: 10,
     paddingVertical: 3,
-    borderRadius: 999,
+    borderRadius: radios.pill,
   },
   textoBadge: {
     fontSize: 11,
@@ -327,22 +419,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colores.textoSuave,
   },
-  rutaLinea: {
-    fontSize: 13,
-    color: colores.texto,
-    marginBottom: 4,
-  },
   filaInferior: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 8,
-    paddingTop: 8,
+    marginTop: 12,
+    paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colores.borde,
   },
   precio: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     color: colores.primario,
   },

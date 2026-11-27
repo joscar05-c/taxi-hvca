@@ -7,18 +7,21 @@ import {
   View,
 } from 'react-native';
 import { Redirect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
   Input,
-  PantallaCentrada,
   SeccionVerificacionTelefono,
   authRepository,
   colores,
+  radios,
+  sombras,
   useAuthStore,
 } from '@hvca/shared';
 
 export default function PantallaPerfilConductor() {
+  const insets = useSafeAreaInsets();
   const { session, perfil, setPerfil } = useAuthStore();
   const [cerrandoSesion, setCerrandoSesion] = useState(false);
 
@@ -168,144 +171,215 @@ export default function PantallaPerfilConductor() {
   })();
 
   return (
-    <PantallaCentrada>
+    <View style={styles.pantalla}>
+      <View
+        style={[
+          styles.cabeceraSuperior,
+          { paddingTop: Math.max(insets.top, 16) + 4 },
+        ]}
+      >
+        <Text style={styles.tituloPantalla}>Mi Perfil</Text>
+        <Text style={styles.subtituloPantalla}>
+          Cuenta, vehículo y documentación verificada
+        </Text>
+      </View>
+
       <ScrollView
-        contentContainerStyle={styles.contenido}
+        contentContainerStyle={[
+          styles.contenido,
+          { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Cabecera del Conductor */}
-        <View style={styles.headerPerfil}>
-          <View style={styles.avatar}>
-            <Text style={styles.textoAvatar}>{iniciales}</Text>
-          </View>
-
-          <View style={styles.infoUsuario}>
-            <Text style={styles.nombre}>{perfil?.nombre || 'Conductor Taxi HVCA'}</Text>
-            <Text style={styles.email}>{session.user.email || 'Sin correo asociado'}</Text>
-            <View style={styles.badgeRol}>
-              <Text style={styles.textoBadgeRol}>CONDUCTOR OFICIAL</Text>
+        <View style={styles.columnaCentral}>
+          {/* Cabecera del Conductor */}
+          <View style={[styles.headerPerfil, sombras.suave]}>
+            <View style={styles.avatar}>
+              <Text style={styles.textoAvatar}>{iniciales}</Text>
             </View>
-          </View>
-        </View>
 
-        {/* Métricas de Operación */}
-        <View style={styles.filaMetricas}>
-          <View style={styles.cardMetrica}>
-            <Text style={styles.valorMetrica}>
-              ★ {(perfil?.calificacion_promedio ?? 5.0).toFixed(1)}
-            </Text>
-            <Text style={styles.etiquetaMetrica}>Reputación</Text>
-          </View>
-          <View style={styles.cardMetrica}>
-            <Text
-              style={[
-                styles.valorMetrica,
-                { color: perfil?.esta_conectado ? '#059669' : '#6B7280' },
-              ]}
-            >
-              {perfil?.esta_conectado ? 'En Línea' : 'Desconectado'}
-            </Text>
-            <Text style={styles.etiquetaMetrica}>Estado</Text>
-          </View>
-        </View>
-
-        {/* Documentación y Vehículo (KYC) */}
-        <View style={styles.cardVehiculo}>
-          <View style={styles.cabeceraDocs}>
-            <Text style={styles.tituloSeccion}>Documentación y Vehículo (KYC)</Text>
-            <View style={[styles.badgeDocs, infoDocs.badgeStyle]}>
-              <Text style={[styles.textoBadgeDocs, infoDocs.textoStyle]}>
-                {infoDocs.etiqueta}
+            <View style={styles.infoUsuario}>
+              <Text style={styles.nombre} numberOfLines={1}>
+                {perfil?.nombre || 'Conductor Taxi HVCA'}
               </Text>
+              <Text style={styles.email} numberOfLines={1}>
+                {session.user.email || 'Sin correo asociado'}
+              </Text>
+              <View style={styles.badgeRol}>
+                <Text style={styles.textoBadgeRol}>CONDUCTOR OFICIAL</Text>
+              </View>
             </View>
           </View>
 
-          {infoDocs.mensaje && infoDocs.avisoStyle && infoDocs.avisoTextoStyle ? (
-            <View style={[styles.avisoDocsBase, infoDocs.avisoStyle]}>
-              <Text style={[styles.textoAvisoDocsBase, infoDocs.avisoTextoStyle]}>
-                {infoDocs.mensaje}
+          {/* Métricas de Operación */}
+          <View style={styles.filaMetricas}>
+            <View style={[styles.cardMetrica, sombras.suave]}>
+              <Text style={styles.valorMetrica}>
+                <Text style={styles.estrellaDorada}>★ </Text>
+                {(perfil?.calificacion_promedio ?? 5.0).toFixed(1)}
               </Text>
+              <Text style={styles.etiquetaMetrica}>Reputación</Text>
             </View>
-          ) : null}
+            <View style={[styles.cardMetrica, sombras.suave]}>
+              <View style={styles.filaEstadoMetrica}>
+                <View
+                  style={[
+                    styles.puntoEstado,
+                    {
+                      backgroundColor: perfil?.esta_conectado
+                        ? colores.exito
+                        : colores.textoSuave,
+                    },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.valorMetrica,
+                    {
+                      color: perfil?.esta_conectado
+                        ? colores.exitoOscuro
+                        : colores.textoSuave,
+                    },
+                  ]}
+                >
+                  {perfil?.esta_conectado ? 'En Línea' : 'Desconectado'}
+                </Text>
+              </View>
+              <Text style={styles.etiquetaMetrica}>Estado</Text>
+            </View>
+          </View>
 
-          {exitoDocs ? <Text style={styles.exito}>{exitoDocs}</Text> : null}
-          {errorDocs ? <Text style={styles.error}>{errorDocs}</Text> : null}
+          {/* Documentación y Vehículo (KYC) */}
+          <View style={[styles.cardVehiculo, sombras.suave]}>
+            <View style={styles.cabeceraDocs}>
+              <Text style={styles.tituloSeccion}>Documentación y Vehículo</Text>
+              <View style={[styles.badgeDocs, infoDocs.badgeStyle]}>
+                <Text style={[styles.textoBadgeDocs, infoDocs.textoStyle]}>
+                  {infoDocs.etiqueta}
+                </Text>
+              </View>
+            </View>
 
-          <Input
-            etiqueta="Vehículo (Marca, Modelo, Placa)"
-            value={vehiculo}
-            onChangeText={setVehiculo}
-            placeholder="Toyota Yaris Blanco · ABC-123"
-            autoCapitalize="words"
-            style={styles.campoDoc}
-          />
-          <Input
-            etiqueta="DNI del Conductor (8 dígitos)"
-            value={dni}
-            onChangeText={(txt) => setDni(txt.replace(/\D/g, ''))}
-            placeholder="12345678"
-            keyboardType="number-pad"
-            maxLength={8}
-            style={styles.campoDoc}
-          />
-          <Input
-            etiqueta="Licencia de Conducir (Brevete)"
-            value={licencia}
-            onChangeText={setLicencia}
-            placeholder="Q12345678"
-            autoCapitalize="characters"
-            style={styles.campoDoc}
-          />
-          <Input
-            etiqueta="Número / Póliza SOAT vigente"
-            value={soat}
-            onChangeText={setSoat}
-            placeholder="SOAT-2026-00123"
-            autoCapitalize="characters"
-            style={styles.campoDoc}
-          />
+            {infoDocs.mensaje && infoDocs.avisoStyle && infoDocs.avisoTextoStyle ? (
+              <View style={[styles.avisoDocsBase, infoDocs.avisoStyle]}>
+                <Text style={[styles.textoAvisoDocsBase, infoDocs.avisoTextoStyle]}>
+                  {infoDocs.mensaje}
+                </Text>
+              </View>
+            ) : null}
 
+            {exitoDocs ? (
+              <View style={styles.bannerExito}>
+                <Text style={styles.exito}>{exitoDocs}</Text>
+              </View>
+            ) : null}
+            {errorDocs ? (
+              <View style={styles.bannerError}>
+                <Text style={styles.error}>{errorDocs}</Text>
+              </View>
+            ) : null}
+
+            <Input
+              etiqueta="Vehículo (Marca, Modelo, Placa)"
+              value={vehiculo}
+              onChangeText={setVehiculo}
+              placeholder="Toyota Yaris Blanco · ABC-123"
+              autoCapitalize="words"
+              contenedorEstilo={styles.campoDoc}
+            />
+            <Input
+              etiqueta="DNI del Conductor (8 dígitos)"
+              value={dni}
+              onChangeText={(txt) => setDni(txt.replace(/\D/g, ''))}
+              placeholder="12345678"
+              keyboardType="number-pad"
+              maxLength={8}
+              contenedorEstilo={styles.campoDoc}
+            />
+            <Input
+              etiqueta="Licencia de Conducir (Brevete)"
+              value={licencia}
+              onChangeText={setLicencia}
+              placeholder="Q12345678"
+              autoCapitalize="characters"
+              contenedorEstilo={styles.campoDoc}
+            />
+            <Input
+              etiqueta="Número / Póliza SOAT vigente"
+              value={soat}
+              onChangeText={setSoat}
+              placeholder="SOAT-2026-00123"
+              autoCapitalize="characters"
+              contenedorEstilo={styles.campoDoc}
+            />
+
+            <Button
+              label="Guardar Documentación"
+              onPress={() => void handleGuardarDocumentos()}
+              cargando={guardandoDocs}
+              estilo={styles.botonDocs}
+            />
+          </View>
+
+          {/* Validación Telefónica Obligatoria */}
+          <SeccionVerificacionTelefono perfil={perfil} />
+
+          {/* Cerrar Sesión */}
           <Button
-            label="Guardar Documentación"
-            onPress={() => void handleGuardarDocumentos()}
-            cargando={guardandoDocs}
-            estilo={styles.botonDocs}
+            label="Cerrar Sesión"
+            variante="peligro"
+            onPress={handleCerrarSesion}
+            cargando={cerrandoSesion}
+            estilo={styles.botonSalir}
           />
         </View>
-
-        {/* Validación Telefónica Obligatoria */}
-        <SeccionVerificacionTelefono perfil={perfil} />
-
-        {/* Cerrar Sesión */}
-        <Button
-          label="Cerrar Sesión"
-          variante="peligro"
-          onPress={handleCerrarSesion}
-          cargando={cerrandoSesion}
-          estilo={styles.botonSalir}
-        />
       </ScrollView>
-    </PantallaCentrada>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pantalla: {
+    flex: 1,
+    backgroundColor: colores.superficie,
+  },
+  cabeceraSuperior: {
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+    backgroundColor: colores.fondo,
+    borderBottomWidth: 1,
+    borderBottomColor: colores.borde,
+  },
+  tituloPantalla: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colores.texto,
+    letterSpacing: -0.3,
+  },
+  subtituloPantalla: {
+    fontSize: 13,
+    color: colores.textoSuave,
+    marginTop: 2,
+  },
   contenido: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  columnaCentral: {
     width: '100%',
     maxWidth: 480,
-    paddingVertical: 20,
   },
   headerPerfil: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colores.fondo,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: radios.lg,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 16,
+    borderColor: colores.borde,
+    marginBottom: 12,
   },
   avatar: {
     width: 60,
@@ -316,7 +390,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   textoAvatar: {
-    color: '#FFFFFF',
+    color: colores.fondo,
     fontSize: 22,
     fontWeight: '800',
   },
@@ -334,19 +408,20 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   badgeRol: {
-    backgroundColor: '#DEF7EC',
+    backgroundColor: colores.exitoSuave,
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingVertical: 3,
+    borderRadius: radios.sm - 2,
     marginTop: 6,
     borderWidth: 1,
-    borderColor: '#31C48D',
+    borderColor: colores.exitoBorde,
   },
   textoBadgeRol: {
-    color: '#03543F',
+    color: colores.exitoOscuro,
     fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.4,
   },
   filaMetricas: {
     flexDirection: 'row',
@@ -355,57 +430,71 @@ const styles = StyleSheet.create({
   },
   cardMetrica: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg - 2,
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colores.borde,
+  },
+  filaEstadoMetrica: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  puntoEstado: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  estrellaDorada: {
+    color: '#F59E0B',
   },
   valorMetrica: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: colores.texto,
   },
   etiquetaMetrica: {
     fontSize: 11,
     color: colores.textoSuave,
-    marginTop: 2,
+    marginTop: 3,
+    fontWeight: '600',
   },
   cardVehiculo: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.lg,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 6,
+    borderColor: colores.borde,
+    marginBottom: 4,
   },
   cabeceraDocs: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: colores.bordeSuave,
     paddingBottom: 10,
   },
   tituloSeccion: {
-    fontSize: 14,
-    color: '#111827',
+    fontSize: 15,
+    color: colores.texto,
     fontWeight: '700',
   },
   badgeDocs: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: radios.sm,
     borderWidth: 1,
   },
   badgeDocsOk: {
-    backgroundColor: '#DEF7EC',
-    borderColor: '#31C48D',
+    backgroundColor: colores.exitoSuave,
+    borderColor: colores.exitoBorde,
   },
   badgeDocsPendiente: {
-    backgroundColor: '#FEF3C7',
+    backgroundColor: colores.accentSuave,
     borderColor: '#F59E0B',
   },
   badgeDocsRevision: {
@@ -421,10 +510,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   textoBadgeDocsOk: {
-    color: '#03543F',
+    color: colores.exitoOscuro,
   },
   textoBadgeDocsPendiente: {
-    color: '#92400E',
+    color: colores.accentOscuro,
   },
   textoBadgeDocsRevision: {
     color: '#1E40AF',
@@ -468,21 +557,32 @@ const styles = StyleSheet.create({
   },
   botonDocs: {
     marginTop: 4,
-    minHeight: 44,
+  },
+  bannerError: {
+    backgroundColor: colores.peligroSuave,
+    borderRadius: radios.sm + 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
   },
   error: {
-    color: '#DC2626',
+    color: colores.peligroOscuro,
     fontSize: 12,
     fontWeight: '600',
-    marginBottom: 8,
+  },
+  bannerExito: {
+    backgroundColor: colores.exitoSuave,
+    borderRadius: radios.sm + 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
   },
   exito: {
-    color: '#059669',
+    color: colores.exitoOscuro,
     fontSize: 12,
     fontWeight: '600',
-    marginBottom: 8,
   },
   botonSalir: {
-    marginTop: 16,
+    marginTop: 12,
   },
 });

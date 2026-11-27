@@ -2,19 +2,36 @@ import '../locationTask';
 
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { useAuthInit, useAuthStore } from '@hvca/shared';
+import {
+  Icono,
+  colores,
+  radios,
+  sombras,
+  useAuthInit,
+  useAuthStore,
+} from '@hvca/shared';
 
 export default function RootLayout() {
   useAuthInit('conductor');
   const { isInitialized } = useAuthStore();
 
-  // Mientras no verificamos la sesión persistida, mostramos un splash.
+  // Mientras no verificamos la sesión persistida, mostramos un splash de marca.
   if (!isInitialized) {
     return (
       <View style={styles.splash}>
-        <ActivityIndicator size="large" color="#1A3A8F" />
+        <StatusBar style="dark" />
+        <View style={[styles.emblema, sombras.media]}>
+          <Icono nombre="taxi" size={38} color={colores.fondo} />
+        </View>
+        <Text style={styles.marca}>Taxi HVCA</Text>
+        <Text style={styles.submarca}>Conductor</Text>
+        <ActivityIndicator
+          size="small"
+          color={colores.primario}
+          style={styles.spinner}
+        />
       </View>
     );
   }
@@ -24,7 +41,7 @@ export default function RootLayout() {
   // cuando `session` existe, así el área privada queda protegida.
   return (
     <>
-      <StatusBar style="auto" />
+      <StatusBar style="dark" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="login" />
@@ -40,8 +57,32 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   splash: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colores.superficie,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emblema: {
+    width: 72,
+    height: 72,
+    borderRadius: radios.xl,
+    backgroundColor: colores.primario,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  marca: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colores.texto,
+    letterSpacing: -0.4,
+  },
+  submarca: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colores.exitoOscuro,
+    marginTop: 2,
+  },
+  spinner: {
+    marginTop: 24,
   },
 });

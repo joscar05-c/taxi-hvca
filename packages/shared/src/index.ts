@@ -24,6 +24,10 @@ export { Button } from './ui/Button';
 export type { ButtonProps } from './ui/Button';
 export { BotonGoogle } from './ui/BotonGoogle';
 export type { BotonGoogleProps } from './ui/BotonGoogle';
+export { CabeceraAuth } from './ui/CabeceraAuth';
+export type { CabeceraAuthProps } from './ui/CabeceraAuth';
+export { Icono } from './ui/Icono';
+export type { IconoProps, NombreIcono } from './ui/Icono';
 export { Input } from './ui/Input';
 export type { InputProps } from './ui/Input';
 export { OnboardingCarousel } from './ui/OnboardingCarousel';
@@ -31,9 +35,11 @@ export type {
   OnboardingCarouselProps,
   OnboardingSlide,
 } from './ui/OnboardingCarousel';
+export { RutaVisual } from './ui/RutaVisual';
+export type { RutaVisualProps } from './ui/RutaVisual';
 export { SeccionVerificacionTelefono } from './ui/SeccionVerificacionTelefono';
 export type { SeccionVerificacionTelefonoProps } from './ui/SeccionVerificacionTelefono';
-export { PantallaCentrada, Etiqueta, colores } from './ui/theme';
+export { PantallaCentrada, Etiqueta, colores, radios, sombras } from './ui/theme';
 
 // Hooks compartidos
 export { useAuth } from './hooks/useAuth';

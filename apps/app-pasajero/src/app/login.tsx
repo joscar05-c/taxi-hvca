@@ -8,19 +8,23 @@ import {
   View,
 } from 'react-native';
 import { Link, Redirect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
   BotonGoogle,
+  CabeceraAuth,
   Input,
-  PantallaCentrada,
   authRepository,
   colores,
+  radios,
+  sombras,
   useAuthStore,
   useGoogleLogin,
 } from '@hvca/shared';
 
 export default function PantallaLogin() {
+  const insets = useSafeAreaInsets();
   const { session, authError, setAuthError } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,100 +68,128 @@ export default function PantallaLogin() {
   }
 
   return (
-    <PantallaCentrada>
+    <View style={styles.pantalla}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
-          contentContainerStyle={styles.contenido}
+          contentContainerStyle={[
+            styles.scrollContenido,
+            {
+              paddingTop: Math.max(insets.top, 24) + 12,
+              paddingBottom: Math.max(insets.bottom, 24) + 12,
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.titulo}>Inicia sesión</Text>
-          <Text style={styles.subtitulo}>
-            Bienvenido de vuelta a la app de pasajero.
-          </Text>
+          <View style={[styles.tarjeta, sombras.suave]}>
+            <CabeceraAuth
+              rol="pasajero"
+              titulo="Inicia sesión"
+              subtitulo="Pide tu taxi en Huancavelica en segundos."
+            />
 
-          <Input
-            etiqueta="Email"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoComplete="email"
-            placeholder="tucorreo@ejemplo.com"
-            testID="login-email"
-          />
-          <Input
-            etiqueta="Contraseña"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoComplete="password"
-            placeholder="••••••••"
-            testID="login-password"
-            style={styles.campo}
-          />
+            <Input
+              etiqueta="Correo electrónico"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoComplete="email"
+              placeholder="tucorreo@ejemplo.com"
+              testID="login-email"
+            />
+            <Input
+              etiqueta="Contraseña"
+              value={password}
+              onChangeText={setPassword}
+              esContrasena
+              autoComplete="password"
+              placeholder="••••••••"
+              testID="login-password"
+              contenedorEstilo={styles.campo}
+            />
 
-          {errorVisible ? <Text style={styles.error}>{errorVisible}</Text> : null}
+            {errorVisible ? (
+              <View style={styles.bannerError}>
+                <Text style={styles.textoError}>{errorVisible}</Text>
+              </View>
+            ) : null}
 
-          <Button
-            label="Entrar"
-            onPress={iniciarSesion}
-            cargando={cargando}
-            estilo={styles.boton}
-          />
+            <Button
+              label="Entrar"
+              onPress={iniciarSesion}
+              cargando={cargando}
+              estilo={styles.boton}
+            />
 
-          {/* Separador */}
-          <View style={styles.separadorContainer}>
-            <View style={styles.linea} />
-            <Text style={styles.textoSeparador}>o continúa con</Text>
-            <View style={styles.linea} />
+            <View style={styles.separadorContainer}>
+              <View style={styles.linea} />
+              <Text style={styles.textoSeparador}>o continúa con</Text>
+              <View style={styles.linea} />
+            </View>
+
+            <BotonGoogle
+              onPress={() => {
+                setAuthError(null);
+                void iniciarConGoogle();
+              }}
+              cargando={cargandoGoogle}
+              label="Ingresar con Google"
+            />
+
+            <View style={styles.pieEnlace}>
+              <Text style={styles.textoPie}>¿No tienes cuenta? </Text>
+              <Link href="/registro" style={styles.enlace}>
+                Regístrate
+              </Link>
+            </View>
           </View>
-
-          {/* Botón de Google */}
-          <BotonGoogle
-            onPress={() => {
-              setAuthError(null);
-              void iniciarConGoogle();
-            }}
-            cargando={cargandoGoogle}
-            label="Ingresar con Google"
-          />
-
-          <Link href="/registro" style={styles.enlace}>
-            ¿No tienes cuenta? Regístrate
-          </Link>
         </ScrollView>
       </KeyboardAvoidingView>
-    </PantallaCentrada>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { width: '100%' },
-  contenido: {
+  pantalla: {
+    flex: 1,
+    backgroundColor: colores.superficie,
+  },
+  flex: { flex: 1 },
+  scrollContenido: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  tarjeta: {
     width: '100%',
     maxWidth: 420,
-  },
-  titulo: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: colores.texto,
-  },
-  subtitulo: {
-    fontSize: 14,
-    color: colores.textoSuave,
-    marginBottom: 24,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.xl,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: colores.borde,
   },
   campo: {
-    marginTop: 12,
+    marginTop: 14,
   },
-  error: {
-    color: colores.peligro,
-    marginTop: 12,
+  bannerError: {
+    marginTop: 14,
+    backgroundColor: colores.peligroSuave,
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  textoError: {
+    color: colores.peligroOscuro,
+    fontSize: 13,
+    fontWeight: '600',
   },
   boton: {
-    marginTop: 16,
+    marginTop: 18,
   },
   separadorContainer: {
     flexDirection: 'row',
@@ -173,11 +205,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 12,
     color: colores.textoSuave,
+    fontWeight: '500',
+  },
+  pieEnlace: {
+    marginTop: 22,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  textoPie: {
+    fontSize: 14,
+    color: colores.textoSuave,
   },
   enlace: {
-    marginTop: 20,
-    textAlign: 'center',
+    fontSize: 14,
     color: colores.primario,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

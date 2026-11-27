@@ -8,19 +8,23 @@ import {
   View,
 } from 'react-native';
 import { Link, Redirect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   Button,
   BotonGoogle,
+  CabeceraAuth,
   Input,
-  PantallaCentrada,
   authRepository,
   colores,
+  radios,
+  sombras,
   useAuthStore,
   useGoogleLogin,
 } from '@hvca/shared';
 
 export default function PantallaRegistro() {
+  const insets = useSafeAreaInsets();
   const { session, authError, setAuthError } = useAuthStore();
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -68,120 +72,148 @@ export default function PantallaRegistro() {
   }
 
   return (
-    <PantallaCentrada>
+    <View style={styles.pantalla}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
-          contentContainerStyle={styles.contenido}
+          contentContainerStyle={[
+            styles.scrollContenido,
+            {
+              paddingTop: Math.max(insets.top, 20) + 8,
+              paddingBottom: Math.max(insets.bottom, 24) + 12,
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.titulo}>Crea tu cuenta</Text>
-          <Text style={styles.subtitulo}>
-            Regístrate como pasajero para moverte por Huancavelica.
-          </Text>
+          <View style={[styles.tarjeta, sombras.suave]}>
+            <CabeceraAuth
+              rol="pasajero"
+              titulo="Crea tu cuenta"
+              subtitulo="Regístrate como pasajero para moverte por Huancavelica."
+            />
 
-          {/* Botón de Google Principal */}
-          <BotonGoogle
-            onPress={() => {
-              setAuthError(null);
-              void iniciarConGoogle();
-            }}
-            cargando={cargandoGoogle}
-            label="Registrarse con Google"
-          />
+            <BotonGoogle
+              onPress={() => {
+                setAuthError(null);
+                void iniciarConGoogle();
+              }}
+              cargando={cargandoGoogle}
+              label="Registrarse con Google"
+            />
 
-          {/* Separador */}
-          <View style={styles.separadorContainer}>
-            <View style={styles.linea} />
-            <Text style={styles.textoSeparador}>o con correo electrónico</Text>
-            <View style={styles.linea} />
+            <View style={styles.separadorContainer}>
+              <View style={styles.linea} />
+              <Text style={styles.textoSeparador}>o con correo electrónico</Text>
+              <View style={styles.linea} />
+            </View>
+
+            <Input
+              etiqueta="Nombre completo"
+              value={nombre}
+              onChangeText={setNombre}
+              autoCapitalize="words"
+              autoComplete="name"
+              placeholder="Juan Pérez"
+              testID="registro-nombre"
+            />
+            <Input
+              etiqueta="Correo electrónico"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoComplete="email"
+              placeholder="juan@ejemplo.com"
+              contenedorEstilo={styles.campo}
+              testID="registro-email"
+            />
+            <Input
+              etiqueta="Teléfono"
+              value={telefono}
+              onChangeText={setTelefono}
+              keyboardType="phone-pad"
+              autoComplete="tel"
+              placeholder="+51 984 123 456"
+              contenedorEstilo={styles.campo}
+              testID="registro-telefono"
+            />
+            <Input
+              etiqueta="Contraseña"
+              value={password}
+              onChangeText={setPassword}
+              esContrasena
+              autoComplete="password-new"
+              placeholder="Mínimo 6 caracteres"
+              contenedorEstilo={styles.campo}
+              testID="registro-password"
+            />
+
+            {errorVisible ? (
+              <View style={styles.bannerError}>
+                <Text style={styles.textoError}>{errorVisible}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Crear cuenta"
+              onPress={registrar}
+              cargando={cargando}
+              estilo={styles.boton}
+            />
+
+            <View style={styles.pieEnlace}>
+              <Text style={styles.textoPie}>¿Ya tienes cuenta? </Text>
+              <Link href="/login" style={styles.enlace}>
+                Inicia sesión
+              </Link>
+            </View>
           </View>
-
-          <Input
-            etiqueta="Nombre completo"
-            value={nombre}
-            onChangeText={setNombre}
-            autoComplete="name"
-            placeholder="Juan Pérez"
-            testID="registro-nombre"
-          />
-          <Input
-            etiqueta="Email"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoComplete="email"
-            placeholder="juan@ejemplo.com"
-            style={styles.campo}
-            testID="registro-email"
-          />
-          <Input
-            etiqueta="Teléfono"
-            value={telefono}
-            onChangeText={setTelefono}
-            keyboardType="phone-pad"
-            autoComplete="tel"
-            placeholder="+51 984 123 456"
-            style={styles.campo}
-            testID="registro-telefono"
-          />
-          <Input
-            etiqueta="Contraseña"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoComplete="password-new"
-            placeholder="Mínimo 6 caracteres"
-            style={styles.campo}
-            testID="registro-password"
-          />
-
-          {errorVisible ? <Text style={styles.error}>{errorVisible}</Text> : null}
-
-          <Button
-            label="Crear cuenta"
-            onPress={registrar}
-            cargando={cargando}
-            estilo={styles.boton}
-          />
-
-          <Link href="/login" style={styles.enlace}>
-            ¿Ya tienes cuenta? Inicia sesión
-          </Link>
         </ScrollView>
       </KeyboardAvoidingView>
-    </PantallaCentrada>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { width: '100%' },
-  contenido: {
+  pantalla: {
+    flex: 1,
+    backgroundColor: colores.superficie,
+  },
+  flex: { flex: 1 },
+  scrollContenido: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  tarjeta: {
     width: '100%',
     maxWidth: 420,
-    paddingVertical: 16,
-  },
-  titulo: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: colores.texto,
-  },
-  subtitulo: {
-    fontSize: 14,
-    color: colores.textoSuave,
-    marginBottom: 20,
+    backgroundColor: colores.fondo,
+    borderRadius: radios.xl,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: colores.borde,
   },
   campo: {
-    marginTop: 12,
+    marginTop: 14,
   },
-  error: {
-    color: colores.peligro,
-    marginTop: 12,
+  bannerError: {
+    marginTop: 14,
+    backgroundColor: colores.peligroSuave,
+    borderRadius: radios.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  textoError: {
+    color: colores.peligroOscuro,
+    fontSize: 13,
+    fontWeight: '600',
   },
   boton: {
-    marginTop: 16,
+    marginTop: 18,
   },
   separadorContainer: {
     flexDirection: 'row',
@@ -197,11 +229,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 12,
     color: colores.textoSuave,
+    fontWeight: '500',
+  },
+  pieEnlace: {
+    marginTop: 22,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  textoPie: {
+    fontSize: 14,
+    color: colores.textoSuave,
   },
   enlace: {
-    marginTop: 20,
-    textAlign: 'center',
+    fontSize: 14,
     color: colores.primario,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

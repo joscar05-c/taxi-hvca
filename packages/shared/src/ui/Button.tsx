@@ -1,17 +1,21 @@
+import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
+  View,
   type ViewStyle,
 } from 'react-native';
 
-import { colores } from './theme';
+import { colores, radios, sombras } from './theme';
 
 export interface ButtonProps {
   label: string;
   onPress: () => void;
   variante?: 'primario' | 'secundario' | 'peligro' | 'accent';
+  tamano?: 'sm' | 'md' | 'lg';
+  icono?: ReactNode;
   deshabilitado?: boolean;
   cargando?: boolean;
   estilo?: ViewStyle;
@@ -21,12 +25,16 @@ export function Button({
   label,
   onPress,
   variante = 'primario',
+  tamano = 'md',
+  icono,
   deshabilitado = false,
   cargando = false,
   estilo,
 }: ButtonProps) {
   const inactivo = deshabilitado || cargando;
   const textoBlanco = variante === 'primario' || variante === 'peligro';
+  const conElevacion =
+    !inactivo && (variante === 'primario' || variante === 'accent');
 
   return (
     <Pressable
@@ -34,7 +42,9 @@ export function Button({
       disabled={inactivo}
       style={({ pressed }) => [
         styles.base,
+        styles[tamano],
         styles[variante],
+        conElevacion && sombras.suave,
         pressed && !inactivo && styles.presionado,
         inactivo && styles.deshabilitado,
         estilo,
@@ -44,9 +54,17 @@ export function Button({
       {cargando ? (
         <ActivityIndicator color={textoBlanco ? colores.fondo : colores.texto} />
       ) : (
-        <Text style={styles[textoBlanco ? 'textoPrimario' : 'textoSecundario']}>
-          {label}
-        </Text>
+        <View style={styles.contenido}>
+          {icono ? <View style={styles.icono}>{icono}</View> : null}
+          <Text
+            style={[
+              styles[textoBlanco ? 'textoPrimario' : 'textoSecundario'],
+              tamano === 'sm' && styles.textoSm,
+            ]}
+          >
+            {label}
+          </Text>
+        </View>
       )}
     </Pressable>
   );
@@ -54,19 +72,46 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
+    borderRadius: radios.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  sm: {
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    minHeight: 38,
+  },
+  md: {
+    paddingVertical: 14,
+    paddingHorizontal: 20,
     minHeight: 48,
   },
+  lg: {
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    minHeight: 54,
+  },
   primario: { backgroundColor: colores.primario },
-  secundario: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colores.borde },
+  secundario: {
+    backgroundColor: colores.fondo,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
   peligro: { backgroundColor: colores.peligro },
   accent: { backgroundColor: colores.accent },
-  presionado: { opacity: 0.85 },
+  presionado: { opacity: 0.9, transform: [{ scale: 0.985 }] },
   deshabilitado: { opacity: 0.5 },
-  textoPrimario: { color: colores.fondo, fontSize: 16, fontWeight: '600' },
-  textoSecundario: { color: colores.texto, fontSize: 16, fontWeight: '600' },
+  contenido: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  icono: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textoPrimario: { color: colores.fondo, fontSize: 16, fontWeight: '700' },
+  textoSecundario: { color: colores.texto, fontSize: 16, fontWeight: '700' },
+  textoSm: { fontSize: 13 },
 });
