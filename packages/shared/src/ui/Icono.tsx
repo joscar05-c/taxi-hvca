@@ -11,7 +11,8 @@ export type NombreIcono =
   | 'ojoCerrado'
   | 'taxi'
   | 'objetivo'
-  | 'check';
+  | 'check'
+  | 'lupa';
 
 export interface IconoProps {
   nombre: NombreIcono;
@@ -351,6 +352,37 @@ export function Icono({
             borderBottomWidth: trazo + 0.3,
             borderColor: color,
             transform: [{ rotate: '-45deg' }, { translateY: -1 }],
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (nombre === 'lupa') {
+    const lente = Math.round(size * 0.64);
+    const mango = Math.round(size * 0.34);
+    return (
+      <View style={[styles.caja, { width: size, height: size }]}>
+        <View
+          style={{
+            width: lente,
+            height: lente,
+            borderRadius: lente / 2,
+            borderWidth: trazo,
+            borderColor: color,
+            transform: [{ translateX: -size * 0.1 }, { translateY: -size * 0.1 }],
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            width: mango,
+            height: trazo + 0.3,
+            borderRadius: trazo,
+            backgroundColor: color,
+            bottom: Math.round(size * 0.14),
+            right: Math.round(size * 0.08),
+            transform: [{ rotate: '45deg' }],
           }}
         />
       </View>

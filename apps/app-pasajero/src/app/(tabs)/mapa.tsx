@@ -47,6 +47,8 @@ import {
   type SolicitudViaje,
 } from '@hvca/shared';
 
+import { BuscadorDireccionesModal } from '../../components/BuscadorDireccionesModal';
+
 const ZOOM_INICIAL = 0.01;
 
 const PASOS_VIAJE = [
@@ -145,6 +147,7 @@ export default function PantallaMapa() {
 
   const [viajeVerificado, setViajeVerificado] = useState(false);
   const [modoSeleccion, setModoSeleccion] = useState<'destino' | 'origen'>('destino');
+  const [buscadorTipo, setBuscadorTipo] = useState<'destino' | 'origen' | null>(null);
   const [direccionBajoPin, setDireccionBajoPin] = useState<string | null>(null);
   const [cargandoDireccionPin, setCargandoDireccionPin] = useState(false);
   const [tarifaEnfocada, setTarifaEnfocada] = useState(false);
@@ -576,6 +579,60 @@ export default function PantallaMapa() {
     } else {
       moverCamaraA(punto);
     }
+  }
+
+  function manejarSeleccionBuscador(lugar: { coords: Coordenadas; direccion: string }) {
+    const tipoActivo = buscadorTipo;
+    setBuscadorTipo(null);
+    setError(null);
+    setMensaje(null);
+
+    if (tipoActivo === 'origen') {
+      setOriginCoords(lugar.coords);
+      setOrigenDireccion(lugar.direccion);
+      setModoSeleccion('destino');
+      if (destinoCoords) {
+        ajustarRutaEnMapa(lugar.coords, destinoCoords);
+        const totalSugerido = calcularTarifaParaRuta(lugar.coords, destinoCoords);
+        setTarifa(totalSugerido.toFixed(2));
+      } else {
+        moverCamaraA(lugar.coords);
+      }
+      return;
+    }
+
+    // Selección de destino desde el buscador
+    setDestinoCoords(lugar.coords);
+    setDestinoDireccion(lugar.direccion);
+    setCentroMapa(lugar.coords);
+    setModoSeleccion('destino');
+
+    if (originCoords) {
+      ajustarRutaEnMapa(originCoords, lugar.coords);
+      const totalSugerido = calcularTarifaParaRuta(originCoords, lugar.coords);
+      setTarifa(totalSugerido.toFixed(2));
+    } else {
+      moverCamaraA(lugar.coords);
+    }
+  }
+
+  function manejarElegirEnMapaDesdeBuscador() {
+    const tipoActivo = buscadorTipo;
+    setBuscadorTipo(null);
+    setError(null);
+    setMensaje(null);
+
+    if (tipoActivo === 'origen') {
+      setModoSeleccion('origen');
+      if (originCoords) {
+        moverCamaraA(originCoords);
+      }
+      return;
+    }
+
+    setDestinoCoords(null);
+    setDestinoDireccion(null);
+    setModoSeleccion('destino');
   }
 
   function ajustarTarifa(delta: number) {
@@ -1146,6 +1203,22 @@ export default function PantallaMapa() {
                 <>
                   <Text style={styles.tituloSheet}>¿A dónde te llevamos?</Text>
 
+                  {/* Barra de búsqueda protagonista (abre autocompletado de direcciones) */}
+                  <Pressable
+                    onPress={() => setBuscadorTipo('destino')}
+                    style={({ pressed }) => [
+                      styles.barraBuscador,
+                      pressed && styles.botonFlotantePresionado,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Buscar dirección de destino"
+                  >
+                    <Icono nombre="lupa" size={18} color={colores.primario} />
+                    <Text style={styles.placeholderBuscador} numberOfLines={1}>
+                      Buscar calle, lugar o dirección...
+                    </Text>
+                  </Pressable>
+
                   {/* Origen autodetectado */}
                   <View style={styles.filaOrigenCompacto}>
                     <View style={styles.puntoOrigenSencillo} />
@@ -1156,23 +1229,19 @@ export default function PantallaMapa() {
                       </Text>
                     </View>
                     <Pressable
-                      onPress={() => {
-                        setModoSeleccion('origen');
-                        moverCamaraA(originCoords);
-                        setMensaje(null);
-                      }}
+                      onPress={() => setBuscadorTipo('origen')}
                       hitSlop={8}
                     >
                       <Text style={styles.enlaceCambiar}>Cambiar</Text>
                     </Pressable>
                   </View>
 
-                  {/* Destino en vivo bajo el pin */}
+                  {/* Destino en vivo bajo el pin (opcional si mueve el mapa) */}
                   <View style={styles.cajaPreviaPin}>
                     <View style={styles.puntoDestinoSencillo} />
                     <View style={styles.flexUno}>
                       <Text style={styles.etiquetaPreviaPin}>
-                        Destino bajo el pin (mueve el mapa)
+                        O mueve el mapa para fijar punto exacto
                       </Text>
                       <Text style={styles.textoPreviaPin} numberOfLines={1}>
                         {cargandoDireccionPin
@@ -1230,10 +1299,7 @@ export default function PantallaMapa() {
                           </Text>
                         </View>
                         <Pressable
-                          onPress={() => {
-                            setModoSeleccion('origen');
-                            moverCamaraA(originCoords);
-                          }}
+                          onPress={() => setBuscadorTipo('origen')}
                           hitSlop={8}
                         >
                           <Text style={styles.enlaceCambiar}>Editar</Text>
@@ -1250,11 +1316,7 @@ export default function PantallaMapa() {
                           </Text>
                         </View>
                         <Pressable
-                          onPress={() => {
-                            setDestinoCoords(null);
-                            setDestinoDireccion(null);
-                            setModoSeleccion('destino');
-                          }}
+                          onPress={() => setBuscadorTipo('destino')}
                           hitSlop={8}
                         >
                           <Text style={styles.enlaceCambiar}>Editar</Text>
@@ -1696,6 +1758,15 @@ export default function PantallaMapa() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      <BuscadorDireccionesModal
+        visible={buscadorTipo !== null}
+        tipo={buscadorTipo ?? 'destino'}
+        origenReferencia={originCoords ?? centroMapa}
+        onCerrar={() => setBuscadorTipo(null)}
+        onSeleccionarLugar={manejarSeleccionBuscador}
+        onElegirEnMapa={manejarElegirEnMapaDesdeBuscador}
+      />
     </View>
   );
 }
@@ -1899,6 +1970,24 @@ const styles = StyleSheet.create({
     color: colores.texto,
     marginBottom: 10,
     letterSpacing: -0.3,
+  },
+  barraBuscador: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colores.superficieSecundaria,
+    borderWidth: 1.5,
+    borderColor: colores.primarioBorde,
+    borderRadius: radios.md,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    marginBottom: 10,
+  },
+  placeholderBuscador: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: colores.textoSecundario,
   },
   bannerInfo: {
     backgroundColor: colores.primarioSuave,

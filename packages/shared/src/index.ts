@@ -18,6 +18,17 @@ export {
   formatearReferenciaHuancavelica,
   obtenerDireccionLegible,
 } from './utils/geo';
+export {
+  buscarDirecciones,
+  generarSessionToken,
+  obtenerDetalleLugar,
+} from './utils/places';
+export type {
+  FuenteSugerencia,
+  OpcionesBusquedaLugares,
+  ResultadoBusquedaLugares,
+  SugerenciaLugar,
+} from './utils/places';
 
 // Capa de presentación reutilizable
 export { Button } from './ui/Button';
