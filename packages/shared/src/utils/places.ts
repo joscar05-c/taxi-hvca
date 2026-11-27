@@ -42,7 +42,7 @@ export interface ResultadoBusquedaLugares {
   googleBloqueado?: boolean;
 }
 
-const RADIO_SESGO_METROS = 20000;
+const RADIO_RESTRICCION_METROS = 25000;
 const RADIO_MAX_OSM_KM = 60;
 
 /**
@@ -139,18 +139,17 @@ async function buscarConGooglePlacesNew(
         input: query,
         languageCode: 'es',
         regionCode: 'PE',
-        includedRegionCodes: ['PE'],
         origin: {
           latitude: referencia.latitude,
           longitude: referencia.longitude,
         },
-        locationBias: {
+        locationRestriction: {
           circle: {
             center: {
               latitude: HUANCAVELICA_CENTRO.latitude,
               longitude: HUANCAVELICA_CENTRO.longitude,
             },
-            radius: RADIO_SESGO_METROS,
+            radius: RADIO_RESTRICCION_METROS,
           },
         },
         ...(opciones.sessionToken ? { sessionToken: opciones.sessionToken } : {}),
@@ -204,6 +203,7 @@ async function buscarConGooglePlacesNew(
       });
     }
 
+    lista.sort((a, b) => (a.distanciaKm ?? 999) - (b.distanciaKm ?? 999));
     return { sugerencias: lista, bloqueado: false };
   } catch (e) {
     if (opciones.signal?.aborted) throw e;
@@ -227,7 +227,8 @@ async function buscarConGooglePlacesLegacy(
       language: 'es',
       components: 'country:pe',
       location: `${HUANCAVELICA_CENTRO.latitude},${HUANCAVELICA_CENTRO.longitude}`,
-      radius: String(RADIO_SESGO_METROS),
+      radius: String(RADIO_RESTRICCION_METROS),
+      strictbounds: 'true',
       origin: `${referencia.latitude},${referencia.longitude}`,
       key: opciones.apiKey,
     });
