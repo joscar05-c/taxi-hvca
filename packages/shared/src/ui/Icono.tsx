@@ -9,7 +9,9 @@ export type NombreIcono =
   | 'perfil'
   | 'ojo'
   | 'ojoCerrado'
-  | 'taxi';
+  | 'taxi'
+  | 'objetivo'
+  | 'check';
 
 export interface IconoProps {
   nombre: NombreIcono;
@@ -261,6 +263,96 @@ export function Icono({
             }}
           />
         ) : null}
+      </View>
+    );
+  }
+
+  if (nombre === 'objetivo') {
+    const aro = Math.round(size * 0.64);
+    const punto = Math.max(4, Math.round(size * 0.22));
+    const marca = Math.max(3, Math.round(size * 0.18));
+    return (
+      <View style={[styles.caja, { width: size, height: size }]}>
+        <View
+          style={{
+            width: aro,
+            height: aro,
+            borderRadius: aro / 2,
+            borderWidth: trazo,
+            borderColor: color,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <View
+            style={{
+              width: punto,
+              height: punto,
+              borderRadius: punto / 2,
+              backgroundColor: color,
+            }}
+          />
+        </View>
+        {/* 4 marcas cardinales */}
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            width: trazo,
+            height: marca,
+            borderRadius: trazo,
+            backgroundColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            width: trazo,
+            height: marca,
+            borderRadius: trazo,
+            backgroundColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            height: trazo,
+            width: marca,
+            borderRadius: trazo,
+            backgroundColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            right: 0,
+            height: trazo,
+            width: marca,
+            borderRadius: trazo,
+            backgroundColor: color,
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (nombre === 'check') {
+    const ancho = Math.round(size * 0.62);
+    const alto = Math.round(size * 0.34);
+    return (
+      <View style={[styles.caja, { width: size, height: size }]}>
+        <View
+          style={{
+            width: ancho,
+            height: alto,
+            borderLeftWidth: trazo + 0.3,
+            borderBottomWidth: trazo + 0.3,
+            borderColor: color,
+            transform: [{ rotate: '-45deg' }, { translateY: -1 }],
+          }}
+        />
       </View>
     );
   }

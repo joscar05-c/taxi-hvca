@@ -24,6 +24,54 @@ export const PUNTOS_SIMULACION_HVCA = [
 
 export type PuntoSimulacionHvca = (typeof PUNTOS_SIMULACION_HVCA)[number];
 
+/** Destinos frecuentes en Huancavelica para selección rápida de 1 toque en el mapa. */
+export const DESTINOS_FRECUENTES_HVCA = [
+  {
+    id: 'plaza_armas',
+    nombre: 'Plaza de Armas',
+    direccion: 'Plaza de Armas, Huancavelica',
+    latitude: -12.7865,
+    longitude: -74.9757,
+  },
+  {
+    id: 'terminal',
+    nombre: 'Terminal Terrestre',
+    direccion: 'Terminal Terrestre (Yananaco), Huancavelica',
+    latitude: -12.781,
+    longitude: -74.979,
+  },
+  {
+    id: 'hospital',
+    nombre: 'Hospital Regional',
+    direccion: 'Hospital Departamental, Huancavelica',
+    latitude: -12.7834,
+    longitude: -74.9682,
+  },
+  {
+    id: 'unh',
+    nombre: 'UNH Paturpampa',
+    direccion: 'Universidad Nacional de Huancavelica (Paturpampa)',
+    latitude: -12.7788,
+    longitude: -74.9652,
+  },
+  {
+    id: 'san_cristobal',
+    nombre: 'San Cristóbal',
+    direccion: 'Barrio San Cristóbal, Huancavelica',
+    latitude: -12.7892,
+    longitude: -74.971,
+  },
+  {
+    id: 'ascension',
+    nombre: 'Ascensión',
+    direccion: 'Distrito de Ascensión, Huancavelica',
+    latitude: -12.7915,
+    longitude: -74.982,
+  },
+] as const;
+
+export type DestinoFrecuenteHvca = (typeof DESTINOS_FRECUENTES_HVCA)[number];
+
 export type EstadoDocumentosConductor =
   | 'pendiente'
   | 'en_revision'
